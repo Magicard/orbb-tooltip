@@ -1,14 +1,17 @@
 import Item, { ItemTask } from "./Item";
 import MiniSearch, { SearchResult } from "minisearch";
 import TarkovMarketItem from "./TarkovMarketItem";
+import TaskData from "./TaskData";
+import {
+  fetchTarkovDevJson,
+  TarkovDevTranslationsResponse,
+} from "./tarkovDevApi";
+import log from "electron-log";
 
-// Flat-file JSON API that powers tarkov.dev itself. The old GraphQL API
-// (api.tarkov.dev/graphql) has been unavailable since 2026-07; the
-// maintainers point consumers here instead:
+// Item data comes from the flat-file JSON API that powers tarkov.dev
+// itself. The old GraphQL API (api.tarkov.dev/graphql) has been
+// unavailable since 2026-07; the maintainers point consumers here instead:
 // https://github.com/the-hideout/tarkov-api/issues/474
-const TARKOV_DEV_JSON_API = "https://json.tarkov.dev";
-
-const FETCH_TIMEOUT_MS = 90 * 1000;
 
 type TarkovDevTraderOffer = {
   trader: string;
@@ -40,13 +43,10 @@ type TarkovDevTradersResponse = {
   data: Record<string, { id: string; name: string }>;
 };
 
-type TarkovDevTranslationsResponse = {
-  data: Record<string, string>;
-};
-
 export default class Items {
   items: Item[];
   searchIndex: MiniSearch;
+  taskData: TaskData = new TaskData();
   // Incremented on every fetch so a slow, older request can never
   // overwrite the results of a newer one (e.g. PvE toggle vs 15-min timer)
   private fetchGeneration = 0;
@@ -55,9 +55,21 @@ export default class Items {
     this.items = [];
   }
 
-  async fetchItems(apiKey?: string, usePveMode?: boolean): Promise<void> {
+  async fetchItems(
+    apiKey?: string,
+    usePveMode?: boolean,
+    tarkovTrackerApiToken?: string
+  ): Promise<void> {
     const tarkovMarketApiKey = apiKey || "";
     const generation = ++this.fetchGeneration;
+    const gameMode = usePveMode ? "pve" : "regular";
+
+    // Quest/hideout requirements load in parallel with the items and are
+    // attached afterwards; failures there never block price data
+    const itemTasksPromise = this.getItemTasksMap(
+      gameMode,
+      tarkovTrackerApiToken
+    );
 
     try {
       if (tarkovMarketApiKey.trim() !== "") {
@@ -83,6 +95,7 @@ export default class Items {
         const formattedData: Item[] = data.map((item: TarkovMarketItem) => {
           return {
             id: item.uid,
+            bsgId: item.bsgId,
             name: item.name,
             shortName: item.shortName,
             availableOnFleaMarket: !item.bannedOnFlea,
@@ -110,6 +123,8 @@ export default class Items {
         if (generation !== this.fetchGeneration) return;
         this.items = itemsFromApi;
       }
+      // Not awaited: a slow TarkovTracker call must not delay price data
+      void this.attachItemTasks(itemTasksPromise, generation);
     } catch (error) {
       console.error("Failed to fetch items:", error);
 
@@ -126,6 +141,7 @@ export default class Items {
         console.log(itemsFromApi.length + " items fetched from API");
         if (generation !== this.fetchGeneration) return;
         this.items = itemsFromApi;
+        void this.attachItemTasks(itemTasksPromise, generation);
       } catch (fallbackError) {
         console.error(
           "Failed to fetch items from tarkov.dev API:",
@@ -141,8 +157,8 @@ export default class Items {
 
     const [itemsResponse, itemTranslations, traderNamesById] =
       await Promise.all([
-        this.fetchJson<TarkovDevItemsResponse>(`/${gameMode}/items`),
-        this.fetchJson<TarkovDevTranslationsResponse>(`/${gameMode}/items_en`),
+        fetchTarkovDevJson<TarkovDevItemsResponse>(`/${gameMode}/items`),
+        fetchTarkovDevJson<TarkovDevTranslationsResponse>(`/${gameMode}/items_en`),
         this.getTraderNames(gameMode),
       ]);
 
@@ -194,6 +210,36 @@ export default class Items {
     return formattedData;
   }
 
+  // Never rejects - quest/hideout data is an enhancement, not a dependency
+  async getItemTasksMap(
+    gameMode: string,
+    tarkovTrackerApiToken?: string
+  ): Promise<Map<string, ItemTask[]> | null> {
+    try {
+      const token = (tarkovTrackerApiToken ?? "").trim();
+      const [sources, progress] = await Promise.all([
+        this.taskData.loadSources(gameMode),
+        token ? this.taskData.getProgress(token) : Promise.resolve(null),
+      ]);
+      return this.taskData.buildItemTaskMap(sources, progress);
+    } catch (error) {
+      log.warn("Failed to load quest/hideout data:", error);
+      return null;
+    }
+  }
+
+  async attachItemTasks(
+    itemTasksPromise: Promise<Map<string, ItemTask[]> | null>,
+    generation: number
+  ): Promise<void> {
+    const taskMap = await itemTasksPromise;
+    if (!taskMap || generation !== this.fetchGeneration) return;
+
+    for (const item of this.items) {
+      item.tasks = taskMap.get(item.bsgId ?? item.id) ?? [];
+    }
+  }
+
   async getTraderNames(gameMode: string): Promise<Record<string, string>> {
     const traderNamesById: Record<string, string> = {};
 
@@ -201,8 +247,8 @@ export default class Items {
     // (trader offers fall back to "N/A") rather than failing the whole fetch
     try {
       const [tradersResponse, traderTranslations] = await Promise.all([
-        this.fetchJson<TarkovDevTradersResponse>(`/${gameMode}/traders`),
-        this.fetchJson<TarkovDevTranslationsResponse>(
+        fetchTarkovDevJson<TarkovDevTradersResponse>(`/${gameMode}/traders`),
+        fetchTarkovDevJson<TarkovDevTranslationsResponse>(
           `/${gameMode}/traders_en`
         ),
       ]);
@@ -220,31 +266,6 @@ export default class Items {
     }
 
     return traderNamesById;
-  }
-
-  async fetchJson<T>(path: string): Promise<T> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    try {
-      const res = await fetch(`${TARKOV_DEV_JSON_API}${path}`, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        throw new Error(
-          `tarkov.dev request for ${path} failed: ${res.status} ${res.statusText}`
-        );
-      }
-
-      return (await res.json()) as T;
-    } finally {
-      clearTimeout(timeout);
-    }
   }
 
   initializeSearchIndex(): void {

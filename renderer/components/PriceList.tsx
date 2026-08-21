@@ -67,6 +67,7 @@ export default function PriceList() {
   const [isFrameless, setIsFrameless] = useState(false);
   const [enableAlwaysOnTop, setEnableAlwaysOnTop] = useState(false);
   const [tarkovMarketApiKey, setTarkovMarketApiKey] = useState("");
+  const [tarkovTrackerApiToken, setTarkovTrackerApiToken] = useState("");
   const [borderColorRed, setBorderColorRed] = useState(82);
   const [borderColorGreen, setBorderColorGreen] = useState(89);
   const [borderColorBlue, setBorderColorBlue] = useState(90);
@@ -128,6 +129,7 @@ export default function PriceList() {
         setIsFrameless(config.isFrameless ?? false);
         setEnableAlwaysOnTop(config.enableAlwaysOnTop ?? false);
         setTarkovMarketApiKey(config.tarkovMarketApiKey ?? "");
+        setTarkovTrackerApiToken(config.tarkovTrackerApiToken ?? "");
         setLowestAcceptableScore(config.lowestAcceptableScore ?? 50);
         setBorderColorRed(config.borderColorRed ?? 82);
         setBorderColorGreen(config.borderColorGreen ?? 89);
@@ -445,6 +447,8 @@ export default function PriceList() {
             onEnableAlwaysOnTopChange={setEnableAlwaysOnTop}
             tarkovMarketApiKey={tarkovMarketApiKey}
             onTarkovMarketApiKeyChange={setTarkovMarketApiKey}
+            tarkovTrackerApiToken={tarkovTrackerApiToken}
+            onTarkovTrackerApiTokenChange={setTarkovTrackerApiToken}
             lowestAcceptableScore={lowestAcceptableScore}
             onLowestAcceptableScoreChange={setLowestAcceptableScore}
             borderColorRed={borderColorRed}

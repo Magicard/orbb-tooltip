@@ -11,6 +11,7 @@ export type UserConfig = {
   isFrameless?: boolean;
   enableAlwaysOnTop?: boolean;
   tarkovMarketApiKey?: string;
+  tarkovTrackerApiToken?: string;
   lowestAcceptableScore?: number;
   borderColorRed?: number; // 0-255
   borderColorGreen?: number; // 0-255

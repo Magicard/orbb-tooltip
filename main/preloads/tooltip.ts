@@ -2,15 +2,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import IpcConstants from "../../models/IpcConstants";
 import { UserConfig } from "../../models/UserConfig";
 
-declare global {
-  interface Window {
-    electron: {
-      receive: () => void;
-      getUserConfig: () => Promise<UserConfig>;
-      onConfigChanged: (callback: (config: UserConfig) => void) => void;
-    };
-  }
-}
+// The Window.electron type is declared once in ./main.ts (as the superset
+// of both preloads' APIs); this window only exposes the subset below
 
 contextBridge.exposeInMainWorld("electron", {
   receive: (channel: string, listener: any) => {

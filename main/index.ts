@@ -332,14 +332,19 @@ try {
       items
         .fetchItems(
           initialUserConfig.tarkovMarketApiKey,
-          initialUserConfig.usePveMode
+          initialUserConfig.usePveMode,
+          initialUserConfig.tarkovTrackerApiToken
         )
         .then(async () => {
         setInterval(() => {
           console.log("Refetching updated data");
           const userConfig = getUserConfigData();
           items
-            .fetchItems(userConfig.tarkovMarketApiKey, userConfig.usePveMode)
+            .fetchItems(
+              userConfig.tarkovMarketApiKey,
+              userConfig.usePveMode,
+              userConfig.tarkovTrackerApiToken
+            )
             .catch((error) => {
               // Keep serving the previously fetched prices if a refetch fails
               log.warn("Periodic item refetch failed:", error);
@@ -491,7 +496,8 @@ try {
           const userConfig = getUserConfigData();
           await items.fetchItems(
             userConfig.tarkovMarketApiKey,
-            userConfig.usePveMode
+            userConfig.usePveMode,
+            userConfig.tarkovTrackerApiToken
           );
           return true;
         }
@@ -501,6 +507,18 @@ try {
         return false;
       }
     });
+
+    ipcMain.handle(
+      IpcConstants.ValidateTarkovTrackerToken,
+      async (_event, token: string) => {
+        try {
+          return await items.taskData.validateToken(token);
+        } catch (error) {
+          console.error("TarkovTracker token validation failed:", error);
+          return { ok: false, error: "Validation failed" };
+        }
+      }
+    );
 
     ipcMain.handle(
       IpcConstants.SetUserConfig,

@@ -12,6 +12,9 @@ This is a fork of [sammereye/flea-tooltip](https://github.com/sammereye/flea-too
 - **Screen-center cursor check no longer assumes 1440p** — it now uses your actual display size, and tooltip positioning handles multi-monitor/mixed-DPI setups.
 - **Vendored the OCR runtime DLLs** (Tesseract, Leptonica, image codecs — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). Upstream's repo never included them, so a fresh clone couldn't produce a working build.
 - **The app retries on startup** if the price API is temporarily down (once a minute), and a failed PvE/PvP mode switch reverts the toggle instead of silently serving the other mode's prices.
+- **Live quest & hideout requirements** replace upstream's hardcoded (and long-stale) quest list: tooltips show how many of an item each quest turn-in or hideout upgrade needs, matched by item id against current game data and refreshed with prices.
+- **TarkovTracker sync (optional):** paste a free API token from [tarkovtracker.org/settings](https://tarkovtracker.org/settings) into the app's settings and tooltips become progress-aware — requirements you can work on right now show green, ones locked behind later quests are dimmed "(later)", and ones you've already completed disappear.
+- **Dark tooltip** instead of the white box.
 
 Everything else — the OCR scanning, tooltip overlay, price list window, hotkeys, Tarkov Market API key support — is unchanged from upstream.
 

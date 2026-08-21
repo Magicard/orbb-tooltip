@@ -1,4 +1,8 @@
-import { BrowserWindow, BrowserWindowConstructorOptions } from "electron";
+import {
+  BrowserWindow,
+  BrowserWindowConstructorOptions,
+  shell,
+} from "electron";
 import { getUserConfigData, setUserConfigData } from "../services/config";
 import { UserConfig } from "../../models/UserConfig";
 import log from "electron-log";
@@ -37,6 +41,23 @@ async function createMainWindow(webpackEntry: string, preloadEntry: string) {
   };
 
   const win = new BrowserWindow(config);
+
+  // External links (tarkovtracker.io, fleatooltip.com, ...) open in the
+  // default browser instead of navigating the app window away
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("https://") || url.startsWith("http://")) {
+      shell.openExternal(url);
+    }
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith(webpackEntry.split("/main_window")[0])) {
+      event.preventDefault();
+      if (url.startsWith("https://") || url.startsWith("http://")) {
+        shell.openExternal(url);
+      }
+    }
+  });
 
   win.on("resize", () => {
     const userConfig: UserConfig = getUserConfigData();

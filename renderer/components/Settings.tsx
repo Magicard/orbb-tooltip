@@ -15,6 +15,8 @@ interface SettingsProps {
   onEnableAlwaysOnTopChange: (enabled: boolean) => void;
   tarkovMarketApiKey: string;
   onTarkovMarketApiKeyChange: (apiKey: string) => void;
+  tarkovTrackerApiToken: string;
+  onTarkovTrackerApiTokenChange: (token: string) => void;
   lowestAcceptableScore: number;
   onLowestAcceptableScoreChange: (score: number) => void;
   borderColorRed: number;
@@ -53,6 +55,8 @@ export default function Settings({
   onEnableAlwaysOnTopChange,
   tarkovMarketApiKey,
   onTarkovMarketApiKeyChange,
+  tarkovTrackerApiToken,
+  onTarkovTrackerApiTokenChange,
   lowestAcceptableScore,
   onLowestAcceptableScoreChange,
   borderColorRed,
@@ -85,6 +89,9 @@ export default function Settings({
     useState(enableAlwaysOnTop);
   const [localTarkovMarketApiKey, setLocalTarkovMarketApiKey] =
     useState(tarkovMarketApiKey);
+  const [localTarkovTrackerApiToken, setLocalTarkovTrackerApiToken] = useState(
+    tarkovTrackerApiToken
+  );
   const [localLowestAcceptableScore, setLocalLowestAcceptableScore] =
     useState(lowestAcceptableScore);
   const [localBorderColorRed, setLocalBorderColorRed] = useState(borderColorRed);
@@ -104,6 +111,9 @@ export default function Settings({
   const [localShowTotalPrice, setLocalShowTotalPrice] = useState(showTotalPrice);
   const [isValidatingApiKey, setIsValidatingApiKey] = useState(false);
   const [apiKeyValidationMessage, setApiKeyValidationMessage] = useState("");
+  const [isValidatingTrackerToken, setIsValidatingTrackerToken] =
+    useState(false);
+  const [trackerTokenMessage, setTrackerTokenMessage] = useState("");
   const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
@@ -129,6 +139,10 @@ export default function Settings({
   useEffect(() => {
     setLocalTarkovMarketApiKey(tarkovMarketApiKey);
   }, [tarkovMarketApiKey]);
+
+  useEffect(() => {
+    setLocalTarkovTrackerApiToken(tarkovTrackerApiToken);
+  }, [tarkovTrackerApiToken]);
 
   useEffect(() => {
     setLocalLowestAcceptableScore(lowestAcceptableScore);
@@ -436,6 +450,77 @@ export default function Settings({
       await window.electron.toggleScreenCalibration(enabled);
     } catch (error) {
       console.error("Failed to toggle screen calibration hotkey:", error);
+    }
+  };
+
+  const handleTrackerTokenConnect = async () => {
+    const token = localTarkovTrackerApiToken.trim();
+    if (!token) {
+      setTrackerTokenMessage("✗ Please enter a token");
+      return;
+    }
+
+    setIsValidatingTrackerToken(true);
+    setTrackerTokenMessage("");
+
+    try {
+      const result = await window.electron.validateTarkovTrackerToken(token);
+      if (result?.ok) {
+        const config: UserConfig = await window.electron.getUserConfig();
+        config.tarkovTrackerApiToken = token;
+        await window.electron.setUserConfig(config);
+        onTarkovTrackerApiTokenChange(token);
+        const refetched = await window.electron.refetchItems();
+
+        const who = result.displayName ? ` as ${result.displayName}` : "";
+        const level = result.playerLevel
+          ? ` (Level ${result.playerLevel})`
+          : "";
+        let hint = "";
+        if (result.tokenGameMode === "pve" && !localUsePveMode) {
+          hint = " — PvE token: enable PvE Mode below for matching prices";
+        } else if (result.tokenGameMode === "pvp" && localUsePveMode) {
+          hint = " — PvP token: disable PvE Mode below for matching prices";
+        }
+        if (!refetched) {
+          hint += " — price refresh failed, will retry automatically";
+        }
+        setTrackerTokenMessage(`✓ Connected${who}${level}${hint}`);
+      } else if (result?.error === "unavailable") {
+        setTrackerTokenMessage(
+          "✗ TarkovTracker is unreachable right now — check your connection or try again later"
+        );
+      } else {
+        setTrackerTokenMessage(
+          "✗ Token rejected — copy a fresh one from tarkovtracker.org settings"
+        );
+      }
+    } catch (error) {
+      console.error("TarkovTracker token validation failed:", error);
+      setTrackerTokenMessage("✗ Validation failed, please try again");
+    } finally {
+      setIsValidatingTrackerToken(false);
+    }
+  };
+
+  const handleTrackerTokenClear = async () => {
+    setLocalTarkovTrackerApiToken("");
+    onTarkovTrackerApiTokenChange("");
+    setTrackerTokenMessage("");
+
+    try {
+      const config: UserConfig = await window.electron.getUserConfig();
+      config.tarkovTrackerApiToken = "";
+      await window.electron.setUserConfig(config);
+      const refetched = await window.electron.refetchItems();
+      setTrackerTokenMessage(
+        refetched
+          ? "✓ Disconnected — quest info shown without your progress"
+          : "✓ Disconnected — price refresh failed, will retry automatically"
+      );
+    } catch (error) {
+      console.error("Failed to clear TarkovTracker token:", error);
+      setTrackerTokenMessage("✗ Failed to clear token");
     }
   };
 
@@ -763,6 +848,74 @@ export default function Settings({
                     : "text-red-400"
                 }`}>
                   {apiKeyValidationMessage}
+                </p>
+              )}
+            </div>
+
+            {/* TarkovTracker Sync */}
+            <div className="space-y-2">
+              <div>
+                <label
+                  htmlFor="tracker-token-input"
+                  className="text-sm font-medium"
+                >
+                  TarkovTracker Sync
+                </label>
+                <p className="text-xs text-stone-400">
+                  Tooltips show whether an item is needed for your current
+                  quests or future ones. Create a free API token at{" "}
+                  <a
+                    href="https://tarkovtracker.org/settings"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-green-500 hover:text-green-600"
+                  >
+                    tarkovtracker.org/settings
+                  </a>{" "}
+                  and paste it here.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  id="tracker-token-input"
+                  type="password"
+                  value={localTarkovTrackerApiToken}
+                  onChange={(e) => setLocalTarkovTrackerApiToken(e.target.value)}
+                  placeholder="Paste TarkovTracker token..."
+                  className="flex-1 px-3 w-[105px] py-1 bg-stone-700 border border-stone-600 rounded-md text-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                />
+                <button
+                  onClick={handleTrackerTokenConnect}
+                  disabled={isValidatingTrackerToken}
+                  className={`px-4 py-1 rounded-md font-medium transition-colors ${
+                    isValidatingTrackerToken
+                      ? "bg-stone-600 text-stone-400 cursor-not-allowed"
+                      : "bg-green-500 hover:bg-green-600 text-white"
+                  }`}
+                >
+                  {isValidatingTrackerToken ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className="size-5 animate-spin fill-white"><path opacity=".4" fill="currentColor" d="M0 256c0 141.4 114.6 256 256 256 107.8 0 200-66.6 237.8-160.9-6.6 16.4-25.2 24.4-41.6 17.8s-24.4-25.2-17.8-41.7C406.1 398 336.9 448 256 448 150 448 64 362 64 256S150 64 256 64c9.3 0 18.5 .7 27.5 1.9-17.5-2.5-29.6-18.7-27.1-36.2 2.5-17.2 18.2-29.3 35.4-27.3-11.7-1.6-23.6-2.5-35.8-2.5-141.4 0-256 114.6-256 256z"/><path fill="currentColor" d="M256.3 29.7c2.5-17.5 18.7-29.6 36.2-27.1 124.1 17.8 219.5 124.4 219.5 253.4 0 33.5-6.5 65.6-18.2 95.1-6.6 16.4-25.2 24.4-41.6 17.8s-24.4-25.2-17.8-41.6c8.8-22 13.7-46 13.7-71.3 0-96.7-71.5-176.7-164.5-190.1-17.5-2.5-29.6-18.7-27.1-36.2z"/></svg>
+                  ) : <svg xmlns="http://www.w3.org/2000/svg" className="size-5 fill-white" viewBox="0 0 640 640"><path d="M530.8 134.1C545.1 144.5 548.3 164.5 537.9 178.8L281.9 530.8C276.4 538.4 267.9 543.1 258.5 543.9C249.1 544.7 240 541.2 233.4 534.6L105.4 406.6C92.9 394.1 92.9 373.8 105.4 361.3C117.9 348.8 138.2 348.8 150.7 361.3L252.2 462.8L486.2 141.1C496.6 126.8 516.6 123.6 530.9 134z"/></svg>}
+                </button>
+                <button
+                  onClick={handleTrackerTokenClear}
+                  disabled={isValidatingTrackerToken}
+                  className={`px-4 py-1 rounded-md font-medium transition-colors ${
+                    isValidatingTrackerToken
+                      ? "bg-stone-600 text-stone-400 cursor-not-allowed"
+                      : "bg-red-500 hover:bg-red-600 text-white"
+                  }`}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" className="size-5 fill-white"><path d="M210.5 480L333.5 480L398.8 414.7L225.3 241.2L98.6 367.9L210.6 479.9zM256 544L210.5 544C193.5 544 177.2 537.3 165.2 525.3L49 409C38.1 398.1 32 383.4 32 368C32 352.6 38.1 337.9 49 327L295 81C305.9 70.1 320.6 64 336 64C351.4 64 366.1 70.1 377 81L559 263C569.9 273.9 576 288.6 576 304C576 319.4 569.9 334.1 559 345L424 480L544 480C561.7 480 576 494.3 576 512C576 529.7 561.7 544 544 544L256 544z"/></svg>
+                </button>
+              </div>
+              {trackerTokenMessage && (
+                <p className={`text-sm ${
+                  trackerTokenMessage.includes("✓")
+                    ? "text-green-400"
+                    : "text-red-400"
+                }`}>
+                  {trackerTokenMessage}
                 </p>
               )}
             </div>

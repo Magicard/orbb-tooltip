@@ -44,6 +44,7 @@ function createUserConfigFile(userDataPath: string): void {
     isFrameless: false,
     enableAlwaysOnTop: false,
     tarkovMarketApiKey: "",
+    tarkovTrackerApiToken: "",
     borderColorRed: 82,
     borderColorGreen: 89,
     borderColorBlue: 90,

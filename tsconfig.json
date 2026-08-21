@@ -21,6 +21,8 @@
     "src/**/*",
     "renderer/App.tsx",
     "main/renderer/main.ts",
+    "main/renderer/tooltip.ts",
+    "main/preloads/tooltip.ts",
     "main/preloads/main.ts",
     "main/index.ts",
     "assets.d.ts"

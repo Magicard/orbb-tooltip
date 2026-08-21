@@ -23,6 +23,7 @@ export default class IpcConstants {
   static ToggleAlwaysOnTop = "toggle-always-on-top";
   static GetAllItems = "get-all-items";
   static ValidateApiKey = "validate-api-key";
+  static ValidateTarkovTrackerToken = "validate-tarkovtracker-token";
   static RefetchItems = "refetch-items";
   static ToggleMainWindow = "toggle-main-window";
   static ToggleDeleteLowestItem = "toggle-delete-lowest-item";

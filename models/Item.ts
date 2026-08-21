@@ -7,6 +7,9 @@ export default class Item {
   slots: number;
   tasks: ItemTask[];
   icon: string;
+  // BSG/tarkov.dev item id; differs from id only on the Tarkov Market
+  // path (whose uid is its own scheme). Used to look up quest/hideout data
+  bsgId?: string;
 }
 
 type ItemPrices = {
@@ -25,6 +28,11 @@ export type ItemTask = {
   task: string;
   count: number;
   inRaid: boolean;
+  // "task" (quest) or "hideout" (station upgrade); older data had neither
+  kind?: "task" | "hideout";
+  // Set when TarkovTracker progress is linked: done = already completed,
+  // active = requirement is currently doable, locked = future content
+  status?: "done" | "active" | "locked";
 };
 
 export class ClientItem extends Item {
