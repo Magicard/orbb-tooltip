@@ -265,7 +265,14 @@ export default function PriceList() {
       const columnStart = Math.max(1, calculatedCols - 1);
       const rowStart = Math.max(1, numRows - 1);
 
-      setTotalGridPosition({ columnStart, rowStart });
+      // Only produce a new state object when the position actually changed.
+      // A fresh object every run forced a re-render, which re-ran this effect,
+      // which produced another fresh object... pegging a CPU core forever.
+      setTotalGridPosition((previous) =>
+        previous.columnStart === columnStart && previous.rowStart === rowStart
+          ? previous
+          : { columnStart, rowStart }
+      );
 
       if (totalValueRef.current) {
         totalValueRef.current.style.display = "flex";
