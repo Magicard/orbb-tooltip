@@ -482,6 +482,10 @@ export default function Settings({
         } else if (result.tokenGameMode === "pvp" && localUsePveMode) {
           hint = " — PvP token: disable PvE Mode below for matching prices";
         }
+        if (result.legacyHost) {
+          hint +=
+            " — legacy tarkovtracker.io token; tarkovtracker.org is the maintained site";
+        }
         if (!refetched) {
           hint += " — price refresh failed, will retry automatically";
         }

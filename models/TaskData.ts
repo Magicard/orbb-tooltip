@@ -13,13 +13,17 @@ const CURRENCY_ITEM_IDS = new Set([
   "569668774bdc2da2298b4568",
 ]);
 
-// TarkovTracker progress API. The api.tarkovtracker.org gateway is primary;
-// tarkovtracker.org serves the same route during its deprecation window.
-// (tarkovtracker.io is the retired backend and rejects current tokens.)
+// TarkovTracker progress API. The api.tarkovtracker.org gateway is primary
+// and tarkovtracker.org serves the same route during its deprecation
+// window. tarkovtracker.io is the legacy site with its own accounts and
+// token format; tokens created there only work against it, so it is tried
+// last so existing users are not locked out.
 const TRACKER_PROGRESS_URLS = [
   "https://api.tarkovtracker.org/api/v2/progress",
   "https://tarkovtracker.org/api/v2/progress",
+  "https://tarkovtracker.io/api/v2/progress",
 ];
+const LEGACY_TRACKER_HOST = "tarkovtracker.io";
 
 // The gateway rejects requests whose User-Agent is shorter than 5 chars,
 // and Electron's main-process fetch sends just "node"
@@ -100,6 +104,8 @@ export type TrackerProgress = {
   playerLevel: number;
   pmcFaction?: string;
   displayName?: string;
+  // True when served by the legacy tarkovtracker.io backend
+  legacyHost?: boolean;
 };
 
 export type TrackerFetchResult =
@@ -112,6 +118,7 @@ export type TrackerValidationResult = {
   displayName?: string;
   playerLevel?: number;
   tokenGameMode?: "pvp" | "pve" | "season" | "unknown";
+  legacyHost?: boolean;
   // "unauthorized" = bad token, "unavailable" = TarkovTracker unreachable
   error?: "empty" | "unauthorized" | "unavailable";
 };
@@ -237,6 +244,7 @@ export default class TaskData {
 
   async fetchTrackerProgress(token: string): Promise<TrackerFetchResult> {
     let lastError: unknown = null;
+    let rejectedSomewhere = false;
 
     for (const url of TRACKER_PROGRESS_URLS) {
       const controller = new AbortController();
@@ -254,8 +262,9 @@ export default class TaskData {
         });
 
         if (res.status === 401 || res.status === 403) {
-          log.warn(`TarkovTracker token rejected (${res.status})`);
-          return { status: "unauthorized" };
+          // A token minted on one host is rejected by the others; keep going
+          rejectedSomewhere = true;
+          continue;
         }
 
         if (!res.ok) {
@@ -302,6 +311,7 @@ export default class TaskData {
             typeof data?.displayName === "string"
               ? data.displayName
               : undefined,
+          legacyHost: url.includes(LEGACY_TRACKER_HOST),
         };
         this.lastProgress = progress;
         return { status: "ok", progress };
@@ -312,6 +322,10 @@ export default class TaskData {
       }
     }
 
+    if (rejectedSomewhere) {
+      log.warn("TarkovTracker token rejected by every host");
+      return { status: "unauthorized" };
+    }
     log.warn("TarkovTracker unreachable:", lastError);
     return { status: "unavailable" };
   }
@@ -344,6 +358,7 @@ export default class TaskData {
       displayName: result.progress.displayName,
       playerLevel: result.progress.playerLevel,
       tokenGameMode: tokenGameMode(trimmed),
+      legacyHost: result.progress.legacyHost,
     };
   }
 
