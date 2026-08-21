@@ -19,7 +19,7 @@ import { isDev } from "../utils";
 import { ChildProcessWithoutNullStreams, spawn } from "child_process";
 import fs from "fs";
 import { getUserConfigData, setUserConfigData } from "./services/config";
-import { UserConfig } from "../models/UserConfig";
+import { UserConfig, getGameMode } from "../models/UserConfig";
 
 // Hotkey registration functions
 function registerHotkeys(userConfig: UserConfig) {
@@ -332,7 +332,7 @@ try {
       items
         .fetchItems(
           initialUserConfig.tarkovMarketApiKey,
-          initialUserConfig.usePveMode,
+          getGameMode(initialUserConfig),
           initialUserConfig.tarkovTrackerApiToken
         )
         .then(async () => {
@@ -342,7 +342,7 @@ try {
           items
             .fetchItems(
               userConfig.tarkovMarketApiKey,
-              userConfig.usePveMode,
+              getGameMode(userConfig),
               userConfig.tarkovTrackerApiToken
             )
             .catch((error) => {
@@ -504,7 +504,7 @@ try {
           const userConfig = getUserConfigData();
           await items.fetchItems(
             userConfig.tarkovMarketApiKey,
-            userConfig.usePveMode,
+            getGameMode(userConfig),
             userConfig.tarkovTrackerApiToken
           );
           return true;

@@ -23,6 +23,7 @@ import ScannedSound from "../assets/item-scanned.wav";
 import UppedSound from "../assets/item-upped.wav";
 import ItemExistsSound from "../assets/item-exists.wav";
 import Settings from "./Settings";
+import { GameMode, getGameMode } from "../../models/UserConfig";
 
 export default function PriceList() {
   const priceListHook = useHookstate(PRICE_LIST);
@@ -76,7 +77,7 @@ export default function PriceList() {
   const [enableDeleteLastItem, setEnableDeleteLastItem] = useState(true);
   const [enableIncrementLastItem, setEnableIncrementLastItem] = useState(true);
   const [enableScreenCalibration, setEnableScreenCalibration] = useState(true);
-  const [usePveMode, setUsePveMode] = useState(false);
+  const [gameMode, setGameMode] = useState<GameMode>("regular");
   const [showTotalPrice, setShowTotalPrice] = useState(false);
 
   // Reducer for calculating total loot value
@@ -139,7 +140,7 @@ export default function PriceList() {
         setEnableDeleteLastItem(config.enableDeleteLastItem ?? true);
         setEnableIncrementLastItem(config.enableIncrementLastItem ?? true);
         setEnableScreenCalibration(config.enableScreenCalibration ?? true);
-        setUsePveMode(config.usePveMode ?? false);
+        setGameMode(getGameMode(config));
         setShowTotalPrice(config.showTotalPrice ?? false);
         // Apply volume to audio element - use setTimeout to defer until refs are ready
         const interval = setInterval(() => {
@@ -474,8 +475,8 @@ export default function PriceList() {
             onEnableIncrementLastItemChange={setEnableIncrementLastItem}
             enableScreenCalibration={enableScreenCalibration}
             onEnableScreenCalibrationChange={setEnableScreenCalibration}
-            usePveMode={usePveMode}
-            onUsePveModeChange={setUsePveMode}
+            gameMode={gameMode}
+            onGameModeChange={setGameMode}
             showTotalPrice={showTotalPrice}
             onShowTotalPriceChange={setShowTotalPrice}
           />

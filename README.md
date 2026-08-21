@@ -6,7 +6,7 @@ This is a fork of [sammereye/flea-tooltip](https://github.com/sammereye/flea-too
 
 ## What this fork changes
 
-- **Switched the price source** from the defunct `api.tarkov.dev/graphql` endpoint to the flat-file JSON API at `json.tarkov.dev` — the same data source the tarkov.dev website itself uses (see [the-hideout/tarkov-api#474](https://github.com/the-hideout/tarkov-api/issues/474)). PvP and PvE price modes both still work.
+- **Switched the price source** from the defunct `api.tarkov.dev/graphql` endpoint to the flat-file JSON API at `json.tarkov.dev` — the same data source the tarkov.dev website itself uses (see [the-hideout/tarkov-api#474](https://github.com/the-hideout/tarkov-api/issues/474)). Regular PvP, seasonal PvP and PvE price modes are all supported (Game Mode in settings).
 - **No more startup crash when the API is down.** Fetch failures now surface as an error state in the app instead of killing the main process, and the 15-minute background refresh keeps the last good prices if a refetch fails.
 - **Removed the deprecated `request` package** in favor of native `fetch`, with a request timeout.
 - **Screen-center cursor check no longer assumes 1440p** — it now uses your actual display size, and tooltip positioning handles multi-monitor/mixed-DPI setups.

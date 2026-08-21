@@ -54,6 +54,7 @@ function createUserConfigFile(userDataPath: string): void {
     enableIncrementLastItem: true,
     enableScreenCalibration: true,
     usePveMode: false,
+    gameMode: "regular",
     showTotalPrice: false,
   };
 

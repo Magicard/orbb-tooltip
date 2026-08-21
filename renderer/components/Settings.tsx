@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { UserConfig } from "../../models/UserConfig";
+import {
+  UserConfig,
+  GameMode,
+  GAME_MODE_LABELS,
+} from "../../models/UserConfig";
 
 interface SettingsProps {
   onClose: () => void;
@@ -35,8 +39,8 @@ interface SettingsProps {
   onEnableIncrementLastItemChange: (enabled: boolean) => void;
   enableScreenCalibration: boolean;
   onEnableScreenCalibrationChange: (enabled: boolean) => void;
-  usePveMode: boolean;
-  onUsePveModeChange: (enabled: boolean) => void;
+  gameMode: GameMode;
+  onGameModeChange: (mode: GameMode) => void;
   showTotalPrice: boolean;
   onShowTotalPriceChange: (enabled: boolean) => void;
 }
@@ -75,8 +79,8 @@ export default function Settings({
   onEnableIncrementLastItemChange,
   enableScreenCalibration,
   onEnableScreenCalibrationChange,
-  usePveMode,
-  onUsePveModeChange,
+  gameMode,
+  onGameModeChange,
   showTotalPrice,
   onShowTotalPriceChange,
 }: SettingsProps) {
@@ -107,7 +111,7 @@ export default function Settings({
     useState(enableIncrementLastItem);
   const [localEnableScreenCalibration, setLocalEnableScreenCalibration] =
     useState(enableScreenCalibration);
-  const [localUsePveMode, setLocalUsePveMode] = useState(usePveMode);
+  const [localGameMode, setLocalGameMode] = useState<GameMode>(gameMode);
   const [localShowTotalPrice, setLocalShowTotalPrice] = useState(showTotalPrice);
   const [isValidatingApiKey, setIsValidatingApiKey] = useState(false);
   const [apiKeyValidationMessage, setApiKeyValidationMessage] = useState("");
@@ -181,8 +185,8 @@ export default function Settings({
   }, [enableScreenCalibration]);
 
   useEffect(() => {
-    setLocalUsePveMode(usePveMode);
-  }, [usePveMode]);
+    setLocalGameMode(gameMode);
+  }, [gameMode]);
 
   useEffect(() => {
     setLocalShowTotalPrice(showTotalPrice);
@@ -477,10 +481,16 @@ export default function Settings({
           ? ` (Level ${result.playerLevel})`
           : "";
         let hint = "";
-        if (result.tokenGameMode === "pve" && !localUsePveMode) {
-          hint = " — PvE token: enable PvE Mode below for matching prices";
-        } else if (result.tokenGameMode === "pvp" && localUsePveMode) {
-          hint = " — PvP token: disable PvE Mode below for matching prices";
+        const tokenMode: GameMode | null =
+          result.tokenGameMode === "pve"
+            ? "pve"
+            : result.tokenGameMode === "season"
+              ? "pvp-season"
+              : result.tokenGameMode === "pvp"
+                ? "regular"
+                : null;
+        if (tokenMode && tokenMode !== localGameMode) {
+          hint = ` — this is a ${GAME_MODE_LABELS[tokenMode]} token: set Game Mode below to ${GAME_MODE_LABELS[tokenMode]} for matching prices`;
         }
         if (result.legacyHost) {
           hint +=
@@ -528,32 +538,36 @@ export default function Settings({
     }
   };
 
-  const handleUsePveModeToggle = async (enabled: boolean) => {
-    setLocalUsePveMode(enabled);
-    onUsePveModeChange(enabled);
+  const handleGameModeChange = async (mode: GameMode) => {
+    const previousMode = localGameMode;
+    if (mode === previousMode) return;
+    setLocalGameMode(mode);
+    onGameModeChange(mode);
 
     // Save to user config
     try {
       const config: UserConfig = await window.electron.getUserConfig();
-      config.usePveMode = enabled;
+      config.gameMode = mode;
+      config.usePveMode = mode === "pve";
       await window.electron.setUserConfig(config);
 
-      // Refetch items with new PvE mode setting; revert the toggle if the
-      // refetch fails so we never silently serve the other mode's prices
+      // Refetch items for the new mode; revert the selection if the refetch
+      // fails so we never silently serve another mode's prices
       const refetched = await window.electron.refetchItems();
       if (!refetched) {
-        throw new Error("Refetch with new PvE mode failed");
+        throw new Error("Refetch with new game mode failed");
       }
     } catch (error) {
       console.error("Failed to save user config or refetch items:", error);
-      setLocalUsePveMode(!enabled);
-      onUsePveModeChange(!enabled);
+      setLocalGameMode(previousMode);
+      onGameModeChange(previousMode);
       try {
         const config: UserConfig = await window.electron.getUserConfig();
-        config.usePveMode = !enabled;
+        config.gameMode = previousMode;
+        config.usePveMode = previousMode === "pve";
         await window.electron.setUserConfig(config);
       } catch (revertError) {
-        console.error("Failed to revert PvE mode config:", revertError);
+        console.error("Failed to revert game mode config:", revertError);
       }
     }
   };
@@ -924,34 +938,35 @@ export default function Settings({
               )}
             </div>
 
-            {/* PvE Mode Toggle */}
-            <div className="flex items-center justify-between">
+            {/* Game Mode */}
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <label
-                  htmlFor="pve-mode-toggle"
-                  className="text-sm font-medium cursor-pointer"
-                >
-                  PvE Mode
-                </label>
+                <span className="text-sm font-medium">Game Mode</span>
                 <p className="text-xs text-stone-400">
-                  Use PvE flea market prices from Tarkov.dev (only applies when not using Tarkov Market API key)
+                  Which flea market to price from: regular PvP, the seasonal PvP wipe, or PvE (tarkov.dev data only)
                 </p>
               </div>
-              <button
-                id="pve-mode-toggle"
-                onClick={() => handleUsePveModeToggle(!localUsePveMode)}
-                className={`relative inline-flex h-5 w-10 min-w-10 items-center rounded-full transition-colors ${
-                  localUsePveMode ? "bg-green-500" : "bg-stone-600"
-                }`}
-                role="switch"
-                aria-checked={localUsePveMode}
+              <div
+                role="radiogroup"
+                aria-label="Game mode"
+                className="inline-flex shrink-0 rounded-md overflow-hidden border border-stone-600"
               >
-                <span
-                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                    localUsePveMode ? "translate-x-[22px]" : "translate-x-1"
-                  }`}
-                />
-              </button>
+                {(Object.keys(GAME_MODE_LABELS) as GameMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    role="radio"
+                    aria-checked={localGameMode === mode}
+                    onClick={() => handleGameModeChange(mode)}
+                    className={`px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
+                      localGameMode === mode
+                        ? "bg-green-500 text-white"
+                        : "bg-stone-700 text-stone-300 hover:bg-stone-600"
+                    }`}
+                  >
+                    {GAME_MODE_LABELS[mode]}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Show Total Price Toggle */}

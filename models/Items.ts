@@ -7,6 +7,7 @@ import {
   TarkovDevTranslationsResponse,
 } from "./tarkovDevApi";
 import log from "electron-log";
+import { GameMode } from "./UserConfig";
 
 // Item data comes from the flat-file JSON API that powers tarkov.dev
 // itself. The old GraphQL API (api.tarkov.dev/graphql) has been
@@ -57,12 +58,11 @@ export default class Items {
 
   async fetchItems(
     apiKey?: string,
-    usePveMode?: boolean,
+    gameMode: GameMode = "regular",
     tarkovTrackerApiToken?: string
   ): Promise<void> {
     const tarkovMarketApiKey = apiKey || "";
     const generation = ++this.fetchGeneration;
-    const gameMode = usePveMode ? "pve" : "regular";
 
     // Quest/hideout requirements load in parallel with the items and are
     // attached afterwards; failures there never block price data
@@ -118,7 +118,7 @@ export default class Items {
         this.items = formattedData;
       } else {
         console.log("No API key provided, fetching items from tarkov.dev");
-        const itemsFromApi = await this.getItemsPromise(usePveMode);
+        const itemsFromApi = await this.getItemsPromise(gameMode);
         console.log(itemsFromApi.length + " items fetched from API");
         if (generation !== this.fetchGeneration) return;
         this.items = itemsFromApi;
@@ -137,7 +137,7 @@ export default class Items {
       // Try Tarkov.dev as fallback when API key fails
       try {
         console.log("Falling back to tarkov.dev API");
-        const itemsFromApi = await this.getItemsPromise(usePveMode);
+        const itemsFromApi = await this.getItemsPromise(gameMode);
         console.log(itemsFromApi.length + " items fetched from API");
         if (generation !== this.fetchGeneration) return;
         this.items = itemsFromApi;
@@ -152,8 +152,7 @@ export default class Items {
     }
   }
 
-  async getItemsPromise(usePveMode?: boolean): Promise<Item[]> {
-    const gameMode = usePveMode ? "pve" : "regular";
+  async getItemsPromise(gameMode: GameMode = "regular"): Promise<Item[]> {
 
     const [itemsResponse, itemTranslations, traderNamesById] =
       await Promise.all([

@@ -1,3 +1,18 @@
+// json.tarkov.dev game modes: regular PvP, the seasonal PvP wipe, and PvE
+export type GameMode = "regular" | "pvp-season" | "pve";
+
+export const GAME_MODE_LABELS: Record<GameMode, string> = {
+  regular: "PvP",
+  "pvp-season": "Season PvP",
+  pve: "PvE",
+};
+
+// gameMode wins; usePveMode is the pre-seasonal setting kept for old configs
+export function getGameMode(config: UserConfig | null | undefined): GameMode {
+  if (config?.gameMode) return config.gameMode;
+  return config?.usePveMode ? "pve" : "regular";
+}
+
 export type UserConfig = {
   mainWindow: {
     width: number;
@@ -21,6 +36,7 @@ export type UserConfig = {
   enableDeleteLastItem?: boolean;
   enableIncrementLastItem?: boolean;
   enableScreenCalibration?: boolean;
-  usePveMode?: boolean;
+  usePveMode?: boolean; // superseded by gameMode, kept for old configs
+  gameMode?: GameMode;
   showTotalPrice?: boolean;
 };
