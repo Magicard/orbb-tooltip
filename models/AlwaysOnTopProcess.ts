@@ -1,20 +1,29 @@
-import { spawn } from 'child_process';
-import { app } from 'electron';
-import path from 'path';
-import { isDev } from '../utils'
+import { BrowserWindow } from "electron";
+import TooltipWindow from "./TooltipWindow";
 
+// Keeps the price-list window above the game. Upstream shelled out to
+// setalwaysontop.exe, which located the windows by their (hardcoded) titles
+// and called SetWindowPos(HWND_TOPMOST) - exactly what Electron's own
+// setAlwaysOnTop does, without depending on window titles.
+//
+// The tooltip overlay is always on top regardless (see TooltipWindow);
+// this only applies the user's "Always on top" setting to the main window.
 export default class AlwaysOnTopProcess {
   initialize(): void {
-    console.log("Initializing always on top process");
-    
-    const alwaysOnTopProcess =  isDev() ? spawn(path.join(app.getAppPath(), "/lib/ocr/setalwaysontop.exe")) : spawn(path.join(process.resourcesPath, "/ocr/setalwaysontop.exe"));
+    this.apply(true);
+  }
 
-    alwaysOnTopProcess.on('close', function(code) {
-      if (code == 0) {
-        console.log("Succesfully put as top most window");
-      } else {
-        console.log("Failed to put as top most window");
-      }
-    });
+  disable(): void {
+    this.apply(false);
+  }
+
+  private apply(enabled: boolean): void {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed() || win instanceof TooltipWindow) continue;
+      win.setAlwaysOnTop(enabled, "screen-saver");
+    }
+    console.log(
+      enabled ? "Main window set as top most" : "Main window no longer top most"
+    );
   }
 }

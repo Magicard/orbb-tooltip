@@ -270,11 +270,11 @@ try {
       app.quit();
     });
 
-    (await mainWindow).on("ready-to-show", () => {
-      if (userConfig.enableAlwaysOnTop) {
-        new AlwaysOnTopProcess().initialize();
-      }
-    });
+    // openMainWindow resolves after the page has loaded, so waiting for
+    // ready-to-show here would usually miss the event - apply directly
+    if (userConfig.enableAlwaysOnTop) {
+      new AlwaysOnTopProcess().initialize();
+    }
 
     // Function to initialize tooltips
     function initializeTooltips() {
@@ -293,17 +293,19 @@ try {
         tooltipWindow.setIgnoreMouseEvents(true);
         console.log("TOOLTIP WINDOW CREATED");
 
-        tooltipWindow.on("ready-to-show", () => {
-          console.log("TOOLTIP WINDOW READY TO SHOW");
+        // ready-to-show is unreliable for a 1x1 transparent window; the
+        // page load event is what actually matters here
+        tooltipWindow.webContents.once("did-finish-load", () => {
+          console.log("TOOLTIP WINDOW LOADED");
           setTimeout(() => {
             const userConfig = getUserConfigData();
             if (userConfig.enableAlwaysOnTop) {
               new AlwaysOnTopProcess().initialize();
             }
-            BrowserWindow.getAllWindows()[0].webContents.send(
+            BrowserWindow.getAllWindows()[0]?.webContents.send(
               IpcConstants.TooltipsReady
             );
-          }, 1000);
+          }, 500);
         });
 
         ocr.tooltipWindow = tooltipWindow;
@@ -602,6 +604,8 @@ try {
       async (_event, enabled: boolean) => {
         if (enabled) {
           new AlwaysOnTopProcess().initialize();
+        } else {
+          new AlwaysOnTopProcess().disable();
         }
 
         const userConfig: UserConfig = getUserConfigData();

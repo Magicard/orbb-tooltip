@@ -15,11 +15,16 @@ export default class TooltipWindow extends BrowserWindow {
       backgroundColor: "#00000000",
       skipTaskbar: true,
       resizable: false,
+      focusable: false,
+      // The overlay must sit above the (borderless) game window or it is
+      // never seen - not tied to the user's "Always on top" setting
+      alwaysOnTop: true,
       webPreferences: {
         preload: TOOLTIP_WINDOW_PRELOAD_WEBPACK_ENTRY,
       },
     });
 
+    this.setAlwaysOnTop(true, "screen-saver");
     this.loadURL(TOOLTIP_WINDOW_WEBPACK_ENTRY);
   }
 }
