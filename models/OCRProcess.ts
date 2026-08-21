@@ -51,7 +51,14 @@ export default class OCRProcess {
     physicalX: number,
     physicalY: number
   ): { x: number; y: number } {
-    // Get the display containing the cursor
+    // screenToDipPoint handles per-display origins and mixed scale factors
+    // (Windows only, which is the only platform the OCR helpers run on)
+    if (typeof screen.screenToDipPoint === "function") {
+      const dipPoint = screen.screenToDipPoint({ x: physicalX, y: physicalY });
+      return { x: Math.round(dipPoint.x), y: Math.round(dipPoint.y) };
+    }
+
+    // Fallback: naive scaling, only correct for a single display at (0,0)
     const display = screen.getDisplayNearestPoint({
       x: physicalX,
       y: physicalY,
@@ -205,11 +212,16 @@ export default class OCRProcess {
           const mousePos = this.getMousePos();
           const electronMousePos = screen.getCursorScreenPoint();
 
+          // Ignore reads while the cursor sits at the center of the screen
+          // (the game snaps it there), regardless of display resolution.
+          // Tolerance is ~10 physical px, so divide by the DIP scale factor
+          const display = screen.getDisplayNearestPoint(electronMousePos);
+          const centerX = display.bounds.x + display.bounds.width / 2;
+          const centerY = display.bounds.y + display.bounds.height / 2;
+          const tolerance = Math.max(2, 10 / display.scaleFactor);
           if (
-            mousePos.x < 2560 / 2 + 10 &&
-            mousePos.y < 1440 / 2 + 10 &&
-            mousePos.x > 2560 / 2 - 10 &&
-            mousePos.y > 1440 / 2 - 10
+            Math.abs(electronMousePos.x - centerX) < tolerance &&
+            Math.abs(electronMousePos.y - centerY) < tolerance
           ) {
             return;
           }
