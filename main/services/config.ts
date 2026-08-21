@@ -55,7 +55,12 @@ function createUserConfigFile(userDataPath: string): void {
     enableScreenCalibration: true,
     usePveMode: false,
     gameMode: "regular",
-    showTotalPrice: false,
+    showPerSlotPrice: true,
+    enableQuestPanel: true,
+    questPanelHotkey: "'",
+    eftLogsPath: "",
+    questScanHotkey: "]",
+    mapHotkey: "[",
   };
 
   fs.writeFileSync(

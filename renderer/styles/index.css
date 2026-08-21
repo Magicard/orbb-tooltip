@@ -59,3 +59,26 @@
 .draggable {
   -webkit-app-region: drag;
 }
+
+/* Slim opacity slider in the quest panel */
+.orbb-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  border-radius: 9999px;
+  background: rgba(120, 113, 108, 0.8);
+  outline: none;
+}
+.orbb-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  background: #a8a29e;
+  border: 0;
+  cursor: pointer;
+}
+.orbb-slider:hover::-webkit-slider-thumb {
+  background: #e7e5e4;
+}

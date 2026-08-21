@@ -41,8 +41,18 @@ interface SettingsProps {
   onEnableScreenCalibrationChange: (enabled: boolean) => void;
   gameMode: GameMode;
   onGameModeChange: (mode: GameMode) => void;
-  showTotalPrice: boolean;
-  onShowTotalPriceChange: (enabled: boolean) => void;
+  showPerSlotPrice: boolean;
+  onShowPerSlotPriceChange: (enabled: boolean) => void;
+  enableQuestPanel: boolean;
+  onEnableQuestPanelChange: (enabled: boolean) => void;
+  questPanelHotkey: string;
+  onQuestPanelHotkeyChange: (hotkey: string) => void;
+  eftLogsPath: string;
+  onEftLogsPathChange: (path: string) => void;
+  questScanHotkey: string;
+  onQuestScanHotkeyChange: (hotkey: string) => void;
+  mapHotkey: string;
+  onMapHotkeyChange: (hotkey: string) => void;
 }
 
 export default function Settings({
@@ -81,8 +91,18 @@ export default function Settings({
   onEnableScreenCalibrationChange,
   gameMode,
   onGameModeChange,
-  showTotalPrice,
-  onShowTotalPriceChange,
+  showPerSlotPrice,
+  onShowPerSlotPriceChange,
+  enableQuestPanel,
+  onEnableQuestPanelChange,
+  questPanelHotkey,
+  onQuestPanelHotkeyChange,
+  eftLogsPath,
+  onEftLogsPathChange,
+  questScanHotkey,
+  onQuestScanHotkeyChange,
+  mapHotkey,
+  onMapHotkeyChange,
 }: SettingsProps) {
   const [localSoundEnabled, setLocalSoundEnabled] = useState(soundEnabled);
   const [localSoundVolume, setLocalSoundVolume] = useState(soundVolume);
@@ -112,7 +132,12 @@ export default function Settings({
   const [localEnableScreenCalibration, setLocalEnableScreenCalibration] =
     useState(enableScreenCalibration);
   const [localGameMode, setLocalGameMode] = useState<GameMode>(gameMode);
-  const [localShowTotalPrice, setLocalShowTotalPrice] = useState(showTotalPrice);
+  const [localShowPerSlotPrice, setLocalShowPerSlotPrice] = useState(showPerSlotPrice);
+  const [localEnableQuestPanel, setLocalEnableQuestPanel] = useState(enableQuestPanel);
+  const [localQuestPanelHotkey, setLocalQuestPanelHotkey] = useState(questPanelHotkey);
+  const [localEftLogsPath, setLocalEftLogsPath] = useState(eftLogsPath);
+  const [localQuestScanHotkey, setLocalQuestScanHotkey] = useState(questScanHotkey);
+  const [localMapHotkey, setLocalMapHotkey] = useState(mapHotkey);
   const [isValidatingApiKey, setIsValidatingApiKey] = useState(false);
   const [apiKeyValidationMessage, setApiKeyValidationMessage] = useState("");
   const [isValidatingTrackerToken, setIsValidatingTrackerToken] =
@@ -189,8 +214,28 @@ export default function Settings({
   }, [gameMode]);
 
   useEffect(() => {
-    setLocalShowTotalPrice(showTotalPrice);
-  }, [showTotalPrice]);
+    setLocalShowPerSlotPrice(showPerSlotPrice);
+  }, [showPerSlotPrice]);
+
+  useEffect(() => {
+    setLocalEnableQuestPanel(enableQuestPanel);
+  }, [enableQuestPanel]);
+
+  useEffect(() => {
+    setLocalQuestPanelHotkey(questPanelHotkey);
+  }, [questPanelHotkey]);
+
+  useEffect(() => {
+    setLocalEftLogsPath(eftLogsPath);
+  }, [eftLogsPath]);
+
+  useEffect(() => {
+    setLocalQuestScanHotkey(questScanHotkey);
+  }, [questScanHotkey]);
+
+  useEffect(() => {
+    setLocalMapHotkey(mapHotkey);
+  }, [mapHotkey]);
 
   const handleSoundToggle = async (enabled: boolean) => {
     setLocalSoundEnabled(enabled);
@@ -572,14 +617,57 @@ export default function Settings({
     }
   };
 
-  const handleShowTotalPriceToggle = async (enabled: boolean) => {
-    setLocalShowTotalPrice(enabled);
-    onShowTotalPriceChange(enabled);
+  const saveQuestPanelConfig = async (patch: Partial<UserConfig>) => {
+    try {
+      const config: UserConfig = await window.electron.getUserConfig();
+      Object.assign(config, patch);
+      await window.electron.setUserConfig(config);
+    } catch (error) {
+      console.error("Failed to save quest panel settings:", error);
+    }
+  };
+
+  const handleQuestPanelToggle = async (enabled: boolean) => {
+    setLocalEnableQuestPanel(enabled);
+    onEnableQuestPanelChange(enabled);
+    await saveQuestPanelConfig({ enableQuestPanel: enabled });
+  };
+
+  const commitQuestPanelHotkey = async () => {
+    const hotkey = localQuestPanelHotkey.trim() || "'";
+    setLocalQuestPanelHotkey(hotkey);
+    onQuestPanelHotkeyChange(hotkey);
+    await saveQuestPanelConfig({ questPanelHotkey: hotkey });
+  };
+
+  const commitQuestScanHotkey = async () => {
+    const hotkey = localQuestScanHotkey.trim() || "]";
+    setLocalQuestScanHotkey(hotkey);
+    onQuestScanHotkeyChange(hotkey);
+    await saveQuestPanelConfig({ questScanHotkey: hotkey });
+  };
+
+  const commitMapHotkey = async () => {
+    const hotkey = localMapHotkey.trim() || "[";
+    setLocalMapHotkey(hotkey);
+    onMapHotkeyChange(hotkey);
+    await saveQuestPanelConfig({ mapHotkey: hotkey });
+  };
+
+  const commitEftLogsPath = async () => {
+    const path = localEftLogsPath.trim();
+    onEftLogsPathChange(path);
+    await saveQuestPanelConfig({ eftLogsPath: path });
+  };
+
+  const handleShowPerSlotPriceToggle = async (enabled: boolean) => {
+    setLocalShowPerSlotPrice(enabled);
+    onShowPerSlotPriceChange(enabled);
 
     // Save to user config
     try {
       const config: UserConfig = await window.electron.getUserConfig();
-      config.showTotalPrice = enabled;
+      config.showPerSlotPrice = enabled;
       await window.electron.setUserConfig(config);
     } catch (error) {
       console.error("Failed to save user config:", error);
@@ -969,31 +1057,126 @@ export default function Settings({
               </div>
             </div>
 
+            {/* Quest Panel */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label
+                    htmlFor="questpanel-toggle"
+                    className="text-sm font-medium cursor-pointer"
+                  >
+                    Quest Panel
+                  </label>
+                  <p className="text-xs text-stone-400">
+                    Press the hotkey in raid to slide in your active quests for the current map (needs TarkovTracker)
+                  </p>
+                </div>
+                <button
+                  id="questpanel-toggle"
+                  onClick={() => handleQuestPanelToggle(!localEnableQuestPanel)}
+                  className={`relative inline-flex h-5 w-10 min-w-10 items-center rounded-full transition-colors ${
+                    localEnableQuestPanel ? "bg-green-500" : "bg-stone-600"
+                  }`}
+                  role="switch"
+                  aria-checked={localEnableQuestPanel}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                      localEnableQuestPanel ? "translate-x-[22px]" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+              <div className="flex gap-2 items-center">
+                <label htmlFor="questpanel-hotkey" className="text-xs text-stone-400 w-24 shrink-0">
+                  Hotkey
+                </label>
+                <input
+                  id="questpanel-hotkey"
+                  type="text"
+                  value={localQuestPanelHotkey}
+                  onChange={(e) => setLocalQuestPanelHotkey(e.target.value)}
+                  onBlur={commitQuestPanelHotkey}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  placeholder="'"
+                  className="w-24 px-3 py-1 bg-stone-700 border border-stone-600 rounded-md text-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                />
+                <span className="text-xs text-stone-500">e.g. ' or # or F8</span>
+              </div>
+              <div className="flex gap-2 items-center">
+                <label htmlFor="questscan-hotkey" className="text-xs text-stone-400 w-24 shrink-0">
+                  Scan hotkey
+                </label>
+                <input
+                  id="questscan-hotkey"
+                  type="text"
+                  value={localQuestScanHotkey}
+                  onChange={(e) => setLocalQuestScanHotkey(e.target.value)}
+                  onBlur={commitQuestScanHotkey}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  placeholder="]"
+                  className="w-24 px-3 py-1 bg-stone-700 border border-stone-600 rounded-md text-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                />
+                <span className="text-xs text-stone-500">press it on the game's Tasks screen to read progress</span>
+              </div>
+              <div className="flex gap-2 items-center">
+                <label htmlFor="map-hotkey" className="text-xs text-stone-400 w-24 shrink-0">
+                  Map hotkey
+                </label>
+                <input
+                  id="map-hotkey"
+                  type="text"
+                  value={localMapHotkey}
+                  onChange={(e) => setLocalMapHotkey(e.target.value)}
+                  onBlur={commitMapHotkey}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  placeholder="["
+                  className="w-24 px-3 py-1 bg-stone-700 border border-stone-600 rounded-md text-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                />
+                <span className="text-xs text-stone-500">show / hide the map window (also the Map button on the panel)</span>
+              </div>
+              <div className="flex gap-2 items-center">
+                <label htmlFor="eft-logs-path" className="text-xs text-stone-400 w-24 shrink-0">
+                  EFT logs folder
+                </label>
+                <input
+                  id="eft-logs-path"
+                  type="text"
+                  value={localEftLogsPath}
+                  onChange={(e) => setLocalEftLogsPath(e.target.value)}
+                  onBlur={commitEftLogsPath}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  placeholder="C:\\Battlestate Games\\Escape from Tarkov\\Logs"
+                  className="flex-1 px-3 py-1 bg-stone-700 border border-stone-600 rounded-md text-white placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                />
+              </div>
+            </div>
+
             {/* Show Total Price Toggle */}
             <div className="flex items-center justify-between">
               <div>
                 <label
-                  htmlFor="show-total-price-toggle"
+                  htmlFor="show-per-slot-price-toggle"
                   className="text-sm font-medium cursor-pointer"
                 >
-                  Show Total Price
+                  Show Price Per Slot
                 </label>
                 <p className="text-xs text-stone-400">
-                  Display total sell value (price x slots) next to per-slot price in tooltips
+                  Tooltips always show what the whole item sells for; this adds the value per inventory slot for items bigger than 1x1
                 </p>
               </div>
               <button
-                id="show-total-price-toggle"
-                onClick={() => handleShowTotalPriceToggle(!localShowTotalPrice)}
+                id="show-per-slot-price-toggle"
+                onClick={() => handleShowPerSlotPriceToggle(!localShowPerSlotPrice)}
                 className={`relative inline-flex h-5 w-10 min-w-10 items-center rounded-full transition-colors ${
-                  localShowTotalPrice ? "bg-green-500" : "bg-stone-600"
+                  localShowPerSlotPrice ? "bg-green-500" : "bg-stone-600"
                 }`}
                 role="switch"
-                aria-checked={localShowTotalPrice}
+                aria-checked={localShowPerSlotPrice}
               >
                 <span
                   className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                    localShowTotalPrice ? "translate-x-[22px]" : "translate-x-1"
+                    localShowPerSlotPrice ? "translate-x-[22px]" : "translate-x-1"
                   }`}
                 />
               </button>

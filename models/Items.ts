@@ -1,7 +1,7 @@
 import Item, { ItemTask } from "./Item";
 import MiniSearch, { SearchResult } from "minisearch";
 import TarkovMarketItem from "./TarkovMarketItem";
-import TaskData from "./TaskData";
+import TaskData, { TrackerProgress, QuestEventMap } from "./TaskData";
 import {
   fetchTarkovDevJson,
   TarkovDevTranslationsResponse,
@@ -48,6 +48,9 @@ export default class Items {
   items: Item[];
   searchIndex: MiniSearch;
   taskData: TaskData = new TaskData();
+  // Accepted / handed-in quests from the game's logs, when available
+  private questEvents: QuestEventMap | null = null;
+  private lastGameMode: GameMode = "regular";
   // Incremented on every fetch so a slow, older request can never
   // overwrite the results of a newer one (e.g. PvE toggle vs 15-min timer)
   private fetchGeneration = 0;
@@ -63,6 +66,7 @@ export default class Items {
   ): Promise<void> {
     const tarkovMarketApiKey = apiKey || "";
     const generation = ++this.fetchGeneration;
+    this.lastGameMode = gameMode;
 
     // Quest/hideout requirements load in parallel with the items and are
     // attached afterwards; failures there never block price data
@@ -220,9 +224,57 @@ export default class Items {
         this.taskData.loadSources(gameMode),
         token ? this.taskData.getProgress(token) : Promise.resolve(null),
       ]);
-      return this.taskData.buildItemTaskMap(sources, progress);
+      return this.taskData.buildItemTaskMap(sources, progress, this.questEvents);
     } catch (error) {
       log.warn("Failed to load quest/hideout data:", error);
+      return null;
+    }
+  }
+
+  // Called when the log watcher learns about accepted/finished quests;
+  // re-annotates the loaded items without any network traffic
+  async setQuestEvents(questEvents: QuestEventMap | null): Promise<void> {
+    this.questEvents = questEvents;
+    if (this.items.length === 0) return;
+    try {
+      const sources = await this.taskData.loadSources(this.lastGameMode);
+      const taskMap = this.taskData.buildItemTaskMap(
+        sources,
+        this.taskData.getLastProgress(),
+        this.questEvents
+      );
+      for (const item of this.items) {
+        item.tasks = taskMap.get(item.bsgId ?? item.id) ?? [];
+      }
+    } catch (error) {
+      log.warn("Failed to re-annotate items with quest events:", error);
+    }
+  }
+
+  // Re-pull TarkovTracker progress only (no price refetch) and re-annotate
+  // the items; used right after a raid ends
+  async refreshTrackerProgress(
+    gameMode: GameMode,
+    tarkovTrackerApiToken?: string
+  ): Promise<TrackerProgress | null> {
+    const token = (tarkovTrackerApiToken ?? "").trim();
+    if (!token) return null;
+    try {
+      const [sources, progress] = await Promise.all([
+        this.taskData.loadSources(gameMode),
+        this.taskData.getProgress(token),
+      ]);
+      const taskMap = this.taskData.buildItemTaskMap(
+        sources,
+        progress,
+        this.questEvents
+      );
+      for (const item of this.items) {
+        item.tasks = taskMap.get(item.bsgId ?? item.id) ?? [];
+      }
+      return progress;
+    } catch (error) {
+      log.warn("Failed to refresh TarkovTracker progress:", error);
       return null;
     }
   }

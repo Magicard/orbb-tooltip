@@ -1,5 +1,5 @@
 import { screen, app, BrowserWindow } from "electron";
-import { spawn } from "child_process";
+import { spawn, ChildProcessWithoutNullStreams } from "child_process";
 import TooltipWindow from "./TooltipWindow";
 import Items from "./Items";
 import IpcConstants from "./IpcConstants";
@@ -30,6 +30,13 @@ export default class OCRProcess {
   // reported rendered size - used to keep the tooltip on the display
   protected tooltipAnchor: { x: number; y: number } | null = null;
   protected tooltipSize = { width: 200, height: 80 };
+  protected ocrProcess: ChildProcessWithoutNullStreams | null = null;
+  // On-demand full-screen OCR (Tasks screen scan): output collected between
+  // SCANRESULT_BEGIN / SCANRESULT_END markers
+  protected scanBuffer: string | null = null;
+  protected scanResolve: ((tsv: string) => void) | null = null;
+  protected scanReject: ((error: Error) => void) | null = null;
+  protected scanTimer: NodeJS.Timeout | null = null;
   protected user32: koffi.IKoffiLib;
   protected Point: koffi.IKoffiCType;
 
@@ -169,9 +176,15 @@ export default class OCRProcess {
           blueValue.toString(),
         ]);
 
+    this.ocrProcess = ocrProcess;
     ocrProcess.stdout.setEncoding("utf-8");
     ocrProcess.stdout.on("data", this.onNewData.bind(this));
     ocrProcess.stderr.on("data", function (data) {
+      // Tesseract chatter from page scans (resolution estimate, diacritics)
+      // is not an error
+      if (/Estimating resolution|Detected \d+ diacritics/.test(String(data))) {
+        return;
+      }
       isDev() ? console.log("stderr: " + data) : log.error("stderr: " + data);
     });
 
@@ -187,8 +200,98 @@ export default class OCRProcess {
     return;
   }
 
+  protected scanQueue: Promise<unknown> = Promise.resolve();
+  // Ctrl+wheel events from the helper's low-level hook (see ocr_cpp)
+  public onWheel: ((delta: number) => void) | null = null;
+
+  // Enable/disable the helper's Ctrl+wheel hook (swallows those events)
+  setWheelHookEnabled(enabled: boolean): void {
+    if (!this.ocrProcess || this.ocrProcess.killed) return;
+    this.ocrProcess.stdin.write(
+      enabled ? "WHEELHOOK ON\n" : "WHEELHOOK OFF\n"
+    );
+  }
+
+  // Ask the helper to OCR the whole screen (or a region, in physical
+  // pixels); resolves with Tesseract TSV. Requests are serialised.
+  requestScreenScan(
+    region?: { x: number; y: number; width: number; height: number },
+    dumpPath?: string,
+    exclude: { x: number; y: number; width: number; height: number }[] = []
+  ): Promise<string> {
+    const run = () =>
+      new Promise<string>((resolve, reject) => {
+        if (!this.ocrProcess || this.ocrProcess.killed) {
+          reject(new Error("OCR process not running"));
+          return;
+        }
+        this.scanResolve = resolve;
+        this.scanReject = reject;
+        this.scanBuffer = "";
+        this.scanTimer = setTimeout(() => this.finishScan(null), 20 * 1000);
+        const command = region
+          ? `SCANREGION ${Math.round(region.x)} ${Math.round(region.y)} ${Math.round(region.width)} ${Math.round(region.height)}` +
+            exclude
+              .map(
+                (r) =>
+                  ` EXCLUDE ${Math.round(r.x)} ${Math.round(r.y)} ${Math.round(r.width)} ${Math.round(r.height)}`
+              )
+              .join("") +
+            (dumpPath ? ` DUMP ${dumpPath}` : "")
+          : "SCAN";
+        this.ocrProcess.stdin.write(command + "\n");
+      });
+    const next = this.scanQueue.then(run, run);
+    this.scanQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  protected finishScan(tsv: string | null): void {
+    if (this.scanTimer) clearTimeout(this.scanTimer);
+    this.scanTimer = null;
+    const resolve = this.scanResolve;
+    const reject = this.scanReject;
+    this.scanResolve = null;
+    this.scanReject = null;
+    this.scanBuffer = null;
+    if (tsv !== null) resolve?.(tsv);
+    else reject?.(new Error("Screen scan timed out"));
+  }
+
   onNewData(data: any): void {
     try {
+      // Wheel events can be interleaved with anything else; pull them out
+      if (this.scanBuffer === null && String(data).includes("WHEEL||")) {
+        const text = String(data);
+        const remaining: string[] = [];
+        for (const line of text.split(/\r?\n/)) {
+          const m = /^WHEEL\|\|(-?\d+)/.exec(line.trim());
+          if (m) this.onWheel?.(Number(m[1]));
+          else if (line.trim()) remaining.push(line);
+        }
+        if (remaining.length === 0) return;
+        data = remaining.join("\n");
+      }
+
+      // Route scan output (which can arrive in several chunks) to the
+      // pending request instead of the tooltip pipeline
+      if (this.scanBuffer !== null) {
+        this.scanBuffer += data.toString();
+        const end = this.scanBuffer.indexOf("SCANRESULT_END");
+        if (end < 0) return;
+        const begin = this.scanBuffer.indexOf("SCANRESULT_BEGIN");
+        const tsv =
+          begin >= 0 && begin < end
+            ? this.scanBuffer.slice(begin + "SCANRESULT_BEGIN".length, end)
+            : "";
+        const rest = this.scanBuffer
+          .slice(end + "SCANRESULT_END".length)
+          .trim();
+        this.finishScan(tsv);
+        if (rest) this.onNewData(rest);
+        return;
+      }
+
       if (data.includes("IGNORE||NO CONFIG FILE FOUND")) {
         this.priceListWindow.webContents.send(
           IpcConstants.ScreenConfigureNeeded

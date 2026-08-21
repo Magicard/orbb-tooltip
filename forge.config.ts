@@ -16,6 +16,7 @@ const config: ForgeConfig = {
       "eng.traineddata",
       "lib/ocr",
       "icon.ico",
+      "maps",
       // "renderer/assets/item-scanned.wav",
       // "renderer/assets/item-upped.wav",
     ],
@@ -51,6 +52,22 @@ const config: ForgeConfig = {
             name: "tooltip_window",
             preload: {
               js: "./main/preloads/tooltip.ts",
+            },
+          },
+          {
+            html: "./renderer/public/questpanel.html",
+            js: "./main/renderer/questpanel.ts",
+            name: "quest_panel_window",
+            preload: {
+              js: "./main/preloads/questpanel.ts",
+            },
+          },
+          {
+            html: "./renderer/public/map.html",
+            js: "./main/renderer/map.ts",
+            name: "map_window",
+            preload: {
+              js: "./main/preloads/map.ts",
             },
           },
         ],

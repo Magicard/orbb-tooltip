@@ -32,4 +32,21 @@ export default class IpcConstants {
   static ToggleScreenCalibration = "toggle-screen-calibration";
   static TooltipConfigChanged = "tooltip-config-changed";
   static TooltipSize = "tooltip-size";
+  static QuestPanelData = "quest-panel-data";
+  static QuestPanelVisibility = "quest-panel-visibility";
+  static QuestPanelInteractive = "quest-panel-interactive";
+  static QuestPanelBounds = "quest-panel-bounds";
+  static QuestPanelSetBounds = "quest-panel-set-bounds";
+  static QuestPanelSelectMap = "quest-panel-select-map";
+  static QuestPanelScroll = "quest-panel-scroll";
+  static QuestPanelOpacity = "quest-panel-opacity";
+  static QuestPanelClose = "quest-panel-close";
+  static QuestPanelToggleMap = "quest-panel-toggle-map";
+  static MapWindowData = "map-window-data";
+  static MapWindowVisibility = "map-window-visibility";
+  static MapWindowBounds = "map-window-bounds";
+  static MapWindowSetBounds = "map-window-set-bounds";
+  static MapWindowInteractive = "map-window-interactive";
+  static MapWindowClose = "map-window-close";
+  static MapWindowOpacity = "map-window-opacity";
 }

@@ -38,5 +38,20 @@ export type UserConfig = {
   enableScreenCalibration?: boolean;
   usePveMode?: boolean; // superseded by gameMode, kept for old configs
   gameMode?: GameMode;
-  showTotalPrice?: boolean;
+  showPerSlotPrice?: boolean; // also show the per-slot value for items bigger than 1x1
+  // In-raid quest panel (Questie-style list toggled by a hotkey)
+  enableQuestPanel?: boolean;
+  questPanelHotkey?: string; // Electron accelerator, e.g. "'" or "#"
+  eftLogsPath?: string; // empty = default install location
+  questPanelY?: number; // remembered panel position (DIP)
+  questPanelHeight?: number; // remembered panel height (DIP)
+  questPanelWidth?: number; // remembered panel width (DIP)
+  questPanelOpacity?: number; // 0.3 - 1, background opacity
+  questScanHotkey?: string; // scan the in-game Tasks screen, default "]"
+  mapHotkey?: string; // toggle the map window, default "["
+  mapWindowBounds?: { x: number; y: number; width: number; height: number };
 };
+
+export const DEFAULT_QUEST_PANEL_HOTKEY = "'";
+export const DEFAULT_QUEST_SCAN_HOTKEY = "]";
+export const DEFAULT_MAP_HOTKEY = "[";

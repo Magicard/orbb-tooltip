@@ -23,6 +23,12 @@ Hover over any item in your stash, inventory or a container and a small overlay 
 - **Quest & hideout needs** — "1 - Gunsmith - AKS-74U", "4 - Stash 2", with a check mark when it has to be *found in raid*
 - **Your progress** *(optional)* — link TarkovTracker and requirements you can do **right now show green**, ones locked behind later quests are dimmed "(later)", and ones you've already finished disappear
 
+Press **`'`** (apostrophe) in a raid and a **quest panel** slides in from the right — the quests you've accepted that have objectives on the map you're on, plus the ones you can do anywhere, with counts from TarkovTracker. Hold **Ctrl** and roll the wheel to scroll it from anywhere — even mid-raid while you keep moving; in menus it's click-through until you hover it, and then you can scroll it, set its opacity (slider top-right), drag it by the grip at the top, resize it from the bottom-left corner, click the map name to browse any map's quests, and click a quest to collapse it — it remembers all of that. It reads the game's own log files (the same thing TarkovMonitor does) to know which quests you've accepted or handed in, which map you loaded into, and when a raid ends — so your progress refreshes straight away.
+
+<div align="center"><img src="docs/images/quest-panel.png" alt="Quest panel on Customs listing active quests with objectives on this map" width="360"></div>
+
+The **Map** button at the top-left of the panel (or **`[`**) opens a floating **map window** for the map you're on: roll the wheel to zoom around the cursor, drag to pan, double-click or press *fit* to see the whole thing, drag the title bar to move it and the bottom-right corner to resize it — it remembers where you left it, and it closes and reopens together with the panel. Maps are plain images in the `maps` folder, named after the game's map id (`shoreline.png`, `bigmap.png` for Customs, `woods.png`…); Shoreline ships with the app, and [maps/README.md](maps/README.md) lists the names for the rest, so drop in whichever ones you like. The **×** next to it closes the panel.
+
 It also keeps a running **loot total** of everything you've scanned, which is handy for deciding what's worth dragging out of a raid.
 
 Prices come from [tarkov.dev](https://tarkov.dev) (community data, refreshed every 15 minutes) for **regular PvP, the seasonal PvP wipe, or PvE** — your pick. It only ever *reads pixels from your screen*; it never touches the game or its files.
@@ -91,7 +97,15 @@ TarkovTracker only knows what it's told. Rather than ticking off quests by hand,
 1. Download `TarkovMonitor.zip` from its [releases page](https://github.com/the-hideout/TarkovMonitor/releases), unzip and run it.
 2. In its **Settings**, paste the same TarkovTracker token and click **Test Token**.
 3. **Catch up on past progress:** still in Settings, scroll to *Initial Setup* → **Read Past Logs**, pick the breakpoint matching the start of your current wipe, and let it replay your logs. This back-fills everything you completed before installing it.
-4. Leave TarkovMonitor running while you play. ORBB ToolTip re-reads your progress every 15 minutes (or instantly when you press ✓ again).
+4. Leave TarkovMonitor running while you play. ORBB ToolTip re-reads your progress about 20 seconds after every raid ends (and every 15 minutes otherwise), so the quest panel and tooltips are current by the time you're back in your stash.
+
+### Exact progress: scan the Tasks screen
+
+Trackers only learn about *completed* objectives, so a kill counter sits at 0/5 until it's done. The game's own **Tasks** screen has the real numbers — open it and press **`]`** to start a ~45-second catch-up: ORBB keeps reading the screen every couple of seconds while **you scroll the list and click through your tasks**, picking up each task's percentage, the exact `3/5` counts of whichever task is selected, and the rotating **Operational** daily/weekly tasks that no database lists. It never sends input to the game. Everything is remembered between scans.
+
+**In a raid**, the bottom-right notifications ("Subtask completed: Eagle Eye", "Task The Cult is ready to be completed") are read as they appear, so the panel shows **READY** or a ✓ the moment it happens — confirmed properly by TarkovTracker after the raid.
+
+> **Where are my logs?** The quest panel reads Tarkov's logs from `C:\Battlestate Games\Escape from Tarkov\Logs` by default. If your game lives elsewhere, set the folder in ⚙ → Quest Panel.
 
 ---
 
@@ -104,6 +118,9 @@ TarkovTracker only knows what it's told. Rather than ticking off quests by hand,
 | **F3** | Remove the last scanned item |
 | **F4** | Add one to the last scanned item's count |
 | **F6** | Screen calibration |
+| **`'`** | Slide the quest panel in / out (changeable in settings) |
+| **`[`** | Show / hide the map window (changeable) |
+| **`]`** | Read progress off the game's Tasks screen (changeable) |
 | **F12** | Developer tools |
 
 Each hotkey can be switched off in settings if it clashes with something.
@@ -131,7 +148,7 @@ tarkov.dev is temporarily unreachable. The app retries every minute on its own; 
 
 ## Is it heavy?
 
-No. Measured idle while the game runs: the whole thing uses about **3% of one CPU core** and ~450 MB of RAM (Electron's floor). The scanner polls your cursor every 25 ms and backs off to 100 ms when nothing's happening, so it's effectively asleep during raids.
+No. Measured idle while the game runs: the whole thing uses about **2% of one CPU core** and ~500 MB of RAM (Electron's floor). The scanner polls your cursor every 25 ms and backs off to 100 ms when nothing's happening, the log watcher checks one file's size every 2 seconds, and the quest panel and map windows don't exist on screen until you open them. In a raid it also glances at the bottom-right corner every 2 seconds for the game's "Subtask completed" notifications, but it strips that strip down to its bright pixels first and skips OCR entirely when there's nothing there, so that costs well under 2% too.
 
 ---
 

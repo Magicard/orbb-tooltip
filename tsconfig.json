@@ -23,6 +23,10 @@
     "main/renderer/main.ts",
     "main/renderer/tooltip.ts",
     "main/preloads/tooltip.ts",
+    "main/renderer/questpanel.ts",
+    "main/preloads/questpanel.ts",
+    "main/renderer/map.ts",
+    "main/preloads/map.ts",
     "main/preloads/main.ts",
     "main/index.ts",
     "assets.d.ts"

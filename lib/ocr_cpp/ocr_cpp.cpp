@@ -5,6 +5,7 @@
 #include <memory>
 #include <cstring>
 #include <tesseract/baseapi.h>
+#include <tesseract/ocrclass.h>
 #include <leptonica/allheaders.h>
 #include <chrono>
 #include <windows.h>
@@ -15,6 +16,8 @@
 #include <algorithm>
 #include <regex>
 #include <string>
+#include <atomic>
+#include <mutex>
 #include <nlohmann/json.hpp>
 
 using namespace std;
@@ -294,6 +297,299 @@ static std::string scanForText(tesseract::TessBaseAPI& tess, int x1, int y1, int
 	return result;
 }
 
+// ---- Ctrl+wheel hook -------------------------------------------------------
+// A low-level mouse hook on its own thread (with its own message loop, so it
+// is never delayed by OCR work). While enabled, Ctrl+wheel is reported to the
+// main process as "WHEEL||<delta>" and swallowed so the game ignores it; the
+// quest panel uses it to scroll while the game owns the cursor.
+static std::atomic<bool> g_wheelHookEnabled{ false };
+static std::mutex g_stdoutMutex;
+
+static LRESULT CALLBACK WheelHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+	if (nCode >= 0 && wParam == WM_MOUSEWHEEL && g_wheelHookEnabled.load()
+		&& (GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
+		const MSLLHOOKSTRUCT* info = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
+		short delta = (short)HIWORD(info->mouseData);
+		{
+			std::lock_guard<std::mutex> lock(g_stdoutMutex);
+			cout << "WHEEL||" << delta << endl;
+			fflush(stdout);
+		}
+		return 1; // swallowed
+	}
+	return CallNextHookEx(NULL, nCode, wParam, lParam);
+}
+
+static void WheelHookThread() {
+	HHOOK hook = SetWindowsHookExW(WH_MOUSE_LL, WheelHookProc, GetModuleHandleW(NULL), 0);
+	if (!hook) return;
+	MSG msg;
+	while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+		TranslateMessage(&msg);
+		DispatchMessageW(&msg);
+	}
+	UnhookWindowsHookEx(hook);
+}
+
+// Non-blocking check for a command line on stdin (the Electron main process
+// writes e.g. "SCAN\n" to request an on-demand full-screen OCR)
+static bool readStdinLine(std::string& line) {
+	static std::string pending;
+	HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+	if (in == INVALID_HANDLE_VALUE || in == NULL) return false;
+
+	DWORD available = 0;
+	if (!PeekNamedPipe(in, NULL, 0, NULL, &available, NULL) || available == 0) {
+		return false;
+	}
+	char buffer[512];
+	DWORD read = 0;
+	while (available > 0) {
+		DWORD toRead = available < sizeof(buffer) ? available : (DWORD)sizeof(buffer);
+		if (!ReadFile(in, buffer, toRead, &read, NULL) || read == 0) break;
+		pending.append(buffer, read);
+		available -= read;
+	}
+	size_t eol = pending.find('\n');
+	if (eol == std::string::npos) return false;
+	line = pending.substr(0, eol);
+	pending.erase(0, eol + 1);
+	while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+	return true;
+}
+
+// Page-style OCR of a Leptonica image (optionally upscaled first - small
+// UI text such as the in-raid notification toasts needs ~2x to be legible
+// to Tesseract). Tooltip-tuned settings are restored afterwards.
+// deadlineMs > 0 bounds the recognition time (the page is a best effort of
+// whatever was read before the deadline) so a busy scene can never stall the
+// helper and the tooltip scans queued behind it
+static std::string ocrPage(tesseract::TessBaseAPI& tess, PIX* source, float scale, int deadlineMs = 0) {
+	std::string result;
+	if (!source) return result;
+
+	PIX* work = source;
+	if (scale > 1.01f) {
+		work = pixScale(source, scale, scale);
+		if (!work) work = source;
+	}
+
+	tess.SetPageSegMode(tesseract::PSM_SPARSE_TEXT);
+	tess.SetVariable("tessedit_char_whitelist", "");
+	tess.SetVariable("classify_bln_numeric_mode", "0");
+	tess.SetVariable("preserve_interword_spaces", "1");
+	tess.SetImage(work);
+	if (scale > 1.01f) {
+		// Report the scaled resolution so word boxes stay in screen pixels
+		tess.SetSourceResolution((int)(70 * scale));
+	}
+
+	if (deadlineMs > 0) {
+		tesseract::ETEXT_DESC monitor;
+		monitor.set_deadline_msecs(deadlineMs);
+		if (tess.Recognize(&monitor) != 0) {
+			std::cerr << "OCR deadline of " << deadlineMs << "ms hit on a " << pixGetWidth(work) << "x" << pixGetHeight(work) << " page" << std::endl;
+		}
+	}
+
+	// TSV (one word per line with its bounding box) so the caller can rebuild
+	// table rows from word positions regardless of how the page segmented
+	char* tsv = tess.GetTSVText(0);
+	if (tsv) {
+		result.assign(tsv);
+		delete[] tsv;
+	}
+
+	if (work != source) pixDestroy(&work);
+
+	// Back to the fast tooltip configuration
+	tess.SetPageSegMode(tesseract::PSM_SINGLE_BLOCK);
+	tess.SetVariable("tessedit_char_whitelist", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,$€₽@- ");
+	tess.SetVariable("classify_bln_numeric_mode", "1");
+	tess.SetVariable("preserve_interword_spaces", "0");
+	return result;
+}
+
+// Build a Leptonica PIX from a captured BGRA screen image
+static PIX* pixFromImage(Image& img) {
+	PIX* pix = pixCreate(img.GetWidth(), img.GetHeight(), 32);
+	if (!pix) return nullptr;
+	const uint8_t* src = img.GetPixels();
+	int stride = img.GetBytesPerScanLine();
+	l_uint32* data = pixGetData(pix);
+	int wpl = pixGetWpl(pix);
+	for (int y = 0; y < img.GetHeight(); y++) {
+		const uint8_t* row = src + y * stride;
+		l_uint32* line = data + y * wpl;
+		for (int x = 0; x < img.GetWidth(); x++) {
+			const uint8_t* px = row + x * 4; // BGRA
+			composeRGBPixel(px[2], px[1], px[0], &line[x]);
+		}
+	}
+	return pix;
+}
+
+struct ScreenRect { int x, y, w, h; };
+
+// Luminance below which a pixel is not "toast text". Notification text is
+// white / light grey on a dark translucent panel, so keeping only the bright
+// pixels leaves Tesseract an almost empty page for ordinary scenery.
+static const int TOAST_BRIGHT_THRESHOLD = 140;
+// Fewer bright pixels than this and there is no text worth recognising
+static const int TOAST_MIN_BRIGHT_PIXELS = 300;
+static const int TOAST_OCR_DEADLINE_MS = 2000;
+static const int PAGE_OCR_DEADLINE_MS = 10000;
+
+// Colour of the cyan tick the Tasks screen draws after a completed objective
+static bool isTickColour(l_uint32 px) {
+	l_int32 r = 0, g = 0, b = 0;
+	extractRGBValues(px, &r, &g, &b);
+	return r < 160 && g > 120 && b > 120 && (g - r) > 40 && (b - r) > 40;
+}
+
+// Append to every word line of a TSV page a 13th column: the number of
+// tick-coloured pixels in and just right of the word's box, so the caller
+// can tell a completed objective row ("... on Customs [tick]") from a
+// pending one. Other lines pass through unchanged.
+static std::string annotateTicks(const std::string& tsv, PIX* pix) {
+	if (!pix || pixGetDepth(pix) != 32) return tsv;
+	const l_int32 w = pixGetWidth(pix), h = pixGetHeight(pix);
+	const l_uint32* data = pixGetData(pix);
+	const l_int32 wpl = pixGetWpl(pix);
+	std::string out;
+	out.reserve(tsv.size() + 2048);
+	size_t start = 0;
+	while (start < tsv.size()) {
+		size_t end = tsv.find('\n', start);
+		const bool last = end == std::string::npos;
+		if (last) end = tsv.size();
+		std::string line = tsv.substr(start, end - start);
+		if (!line.empty() && line.back() == '\r') line.pop_back();
+		if (line.rfind("5\t", 0) == 0) {
+			// level page block para line word left top width height conf text
+			int cols[10] = { 0 };
+			size_t pos = 0;
+			bool ok = true;
+			for (int i = 0; i < 10 && ok; i++) {
+				size_t tab = line.find('\t', pos);
+				if (tab == std::string::npos) { ok = false; break; }
+				cols[i] = atoi(line.substr(pos, tab - pos).c_str());
+				pos = tab + 1;
+			}
+			if (ok) {
+				// From the word's own box (the tick may have been read as a word
+				// itself) to well past its right edge
+				const int x0 = (std::max)(0, cols[6] - 2), x1 = (std::min)(w, cols[6] + cols[8] + 120);
+				const int y0 = (std::max)(0, cols[7] - 2), y1 = (std::min)(h, cols[7] + cols[9] + 2);
+				int ticks = 0;
+				for (int y = y0; y < y1; y++) {
+					const l_uint32* row = data + (size_t)y * wpl;
+					for (int x = (std::max)(0, x0); x < x1; x++) {
+						if (isTickColour(row[x])) ticks++;
+					}
+				}
+				line += "\t" + std::to_string(ticks);
+			}
+		}
+		out += line;
+		out += '\n';
+		start = last ? tsv.size() : end + 1;
+	}
+	return out;
+}
+
+// OCR of the notification strip: bright pixels only, as black text on a white
+// page, and no OCR at all when there is nothing bright
+static std::string ocrToast(tesseract::TessBaseAPI& tess, PIX* pix, const std::string& dumpPath) {
+	std::string result;
+	PIX* rgb = pixGetDepth(pix) == 32 ? pix : pixConvertTo32(pix);
+	PIX* gray = rgb ? pixConvertRGBToGray(rgb, 0.3f, 0.59f, 0.11f) : nullptr;
+	PIX* bin = gray ? pixThresholdToBinary(gray, TOAST_BRIGHT_THRESHOLD) : nullptr;
+	if (bin) {
+		pixInvert(bin, bin);
+		l_int32 bright = 0;
+		pixCountPixels(bin, &bright, NULL);
+		if (!dumpPath.empty()) {
+			std::string binPath = dumpPath;
+			size_t dot = binPath.find_last_of('.');
+			binPath.insert(dot == std::string::npos ? binPath.size() : dot, "-bin");
+			pixWritePng(binPath.c_str(), bin, 0.0f);
+		}
+		if (bright >= TOAST_MIN_BRIGHT_PIXELS) {
+			result = ocrPage(tess, bin, 1.0f, TOAST_OCR_DEADLINE_MS);
+		}
+	}
+	if (bin) pixDestroy(&bin);
+	if (gray) pixDestroy(&gray);
+	if (rgb && rgb != pix) pixDestroy(&rgb);
+	return result;
+}
+
+// OCR a screen region (or the whole primary screen). A partial region is the
+// in-raid notification strip: it is reduced to its bright pixels first and
+// skipped entirely when there is nothing bright, so the 2s polling costs next
+// to nothing while nothing is on screen. Excluded rectangles (our own overlay
+// windows) are blacked out so their text is never read as a notification.
+static std::string scanScreenRegion(tesseract::TessBaseAPI& tess, int x, int y, int w, int h, const std::string& dumpPath = std::string(), const std::vector<ScreenRect>& exclude = std::vector<ScreenRect>()) {
+	std::string result;
+	if (!cachedDesktopDC) return result;
+
+	int screenW = GetSystemMetrics(SM_CXSCREEN);
+	int screenH = GetSystemMetrics(SM_CYSCREEN);
+	if (screenW <= 0 || screenH <= 0) return result;
+	bool fullScreen = (w <= 0 || h <= 0);
+	if (fullScreen) { x = 0; y = 0; w = screenW; h = screenH; }
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	if (x + w > screenW) w = screenW - x;
+	if (y + h > screenH) h = screenH - y;
+	if (w <= 10 || h <= 10) return result;
+
+	Image img(cachedDesktopDC, x, y, w, h);
+	PIX* pix = pixFromImage(img);
+	if (!pix) return result;
+
+	for (const ScreenRect& r : exclude) {
+		int ex = (std::max)(r.x, x), ey = (std::max)(r.y, y);
+		int ex2 = (std::min)(r.x + r.w, x + w), ey2 = (std::min)(r.y + r.h, y + h);
+		if (ex2 <= ex || ey2 <= ey) continue;
+		BOX* box = boxCreate(ex - x, ey - y, ex2 - ex, ey2 - ey);
+		pixClearInRect(pix, box);
+		boxDestroy(&box);
+	}
+
+	if (!dumpPath.empty()) {
+		// Diagnostic: keep what the OCR actually saw
+		pixWritePng(dumpPath.c_str(), pix, 0.0f);
+	}
+
+	if (fullScreen) {
+		result = annotateTicks(ocrPage(tess, pix, 1.0f, PAGE_OCR_DEADLINE_MS), pix);
+	}
+	else {
+		result = ocrToast(tess, pix, dumpPath);
+	}
+	pixDestroy(&pix);
+	return result;
+}
+
+// OCR an image file (offline testing of the toast / Tasks screen parsers).
+// asToast runs the notification pipeline instead of the plain page OCR.
+static std::string scanImageFile(tesseract::TessBaseAPI& tess, const std::string& path, float scale, bool asToast = false) {
+	PIX* pix = pixRead(path.c_str());
+	if (!pix) return std::string();
+	std::string result = asToast
+		? ocrToast(tess, pix, path + ".debug.png")
+		: annotateTicks(ocrPage(tess, pix, scale, PAGE_OCR_DEADLINE_MS), pix);
+	pixDestroy(&pix);
+	return result;
+}
+
+static std::string scanScreenRegionUnused(tesseract::TessBaseAPI& tess, int x, int y, int w, int h) {
+	(void)tess; (void)x; (void)y; (void)w; (void)h;
+	return std::string();
+}
+
 static void rtrim(std::string& s) {
 	// Define the characters to trim (common whitespaces)
 	const std::string whitespaces = " \t\n\r\f\v";
@@ -315,6 +611,8 @@ int main(int argc, char* argv[])
 {
 	// Set DPI awareness to ensure cursor coordinates match actual screen pixels
 	SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+	// Background helper: the game always gets the CPU first
+	SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
 
 	// Parse optional command line arguments for border color: red green blue
 	if (argc >= 4) {
@@ -408,10 +706,63 @@ int main(int argc, char* argv[])
 	// Negative steps: walk left along the bottom border to the true corner
 	short leftwardCheckpoints[4] = { -50, -15, -5, -1 };
 	
+	// Ctrl+wheel hook lives on its own thread (see WheelHookThread)
+	std::thread wheelHookThread(WheelHookThread);
+	wheelHookThread.detach();
+
 	// Optimized polling loop (optimization #7)
 	int sleepInterval = 25; // Default sleep interval
 	
 	while (true) {
+		// On-demand commands from the main process
+		std::string command;
+		if (readStdinLine(command)) {
+			if (command == "WHEELHOOK ON") {
+				g_wheelHookEnabled.store(true);
+			}
+			else if (command == "WHEELHOOK OFF") {
+				g_wheelHookEnabled.store(false);
+			}
+			else if (command == "SCAN" || command.rfind("SCANREGION ", 0) == 0 || command.rfind("SCANFILE ", 0) == 0 || command.rfind("SCANTOAST ", 0) == 0) {
+				std::string page;
+				if (command.rfind("SCANTOAST ", 0) == 0) {
+					page = scanImageFile(tess, command.substr(10), 1.0f, true);
+				}
+				else if (command.rfind("SCANFILE ", 0) == 0) {
+					// SCANFILE <scale> <path>
+					float scale = 1.0f;
+					char pathBuf[1024] = { 0 };
+					sscanf_s(command.c_str() + 9, "%f %1023[^\n]", &scale, pathBuf, (unsigned)sizeof(pathBuf));
+					page = scanImageFile(tess, pathBuf, scale);
+				}
+				else {
+					int rx = 0, ry = 0, rw = 0, rh = 0;
+					std::string dumpPath;
+					std::vector<ScreenRect> exclude;
+					if (command != "SCAN") {
+						// "SCANREGION x y w h [EXCLUDE x y w h]... [DUMP <path>]"
+						sscanf_s(command.c_str() + 11, "%d %d %d %d", &rx, &ry, &rw, &rh);
+						size_t dumpAt = command.find(" DUMP ");
+						if (dumpAt != std::string::npos) dumpPath = command.substr(dumpAt + 6);
+						size_t at = command.find(" EXCLUDE ");
+						while (at != std::string::npos && (dumpAt == std::string::npos || at < dumpAt)) {
+							ScreenRect r = { 0, 0, 0, 0 };
+							if (sscanf_s(command.c_str() + at + 9, "%d %d %d %d", &r.x, &r.y, &r.w, &r.h) == 4 && r.w > 0 && r.h > 0) {
+								exclude.push_back(r);
+							}
+							at = command.find(" EXCLUDE ", at + 9);
+						}
+					}
+					page = scanScreenRegion(tess, rx, ry, rw, rh, dumpPath, exclude);
+				}
+				std::lock_guard<std::mutex> lock(g_stdoutMutex);
+				cout << "SCANRESULT_BEGIN" << endl;
+				cout << page << endl;
+				cout << "SCANRESULT_END" << endl;
+				fflush(stdout);
+			}
+		}
+
 		if (GetCursorPos(&mousePos)) {
 			if (lastValidMousePos.x == mousePos.x && lastValidMousePos.y == mousePos.y) {
 				if (mouseStationaryCount < 1000) mouseStationaryCount++; // capped: a short would wrap after ~13 min
@@ -424,6 +775,7 @@ int main(int argc, char* argv[])
 			else
 			{
 				if (showedMouseMoved == false) {
+					std::lock_guard<std::mutex> lock(g_stdoutMutex);
 					cout << "MOUSEMOVE" << endl;
 					fflush(stdout);
 					showedMouseMoved = true;
@@ -535,6 +887,7 @@ int main(int argc, char* argv[])
 						if (scanText.length() > 3) {
 							lastScannedCursor = mousePos;
 							rtrim(scanText);
+							std::lock_guard<std::mutex> lock(g_stdoutMutex);
 							cout << scanText << "||" << mousePos.x << "," << mousePos.y << endl;
 							fflush(stdout);
 							showedMouseMoved = false;

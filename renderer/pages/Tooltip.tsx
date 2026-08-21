@@ -13,7 +13,7 @@ const MAX_TASK_ROWS = 9;
 export function Tooltip() {
   const tooltipItem = useHookstate(TOOLTIP_ITEM);
   const item = tooltipItem.get().item;
-  const [showTotalPrice, setShowTotalPrice] = useState(false);
+  const [showPerSlotPrice, setShowPerSlotPrice] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Tell the main process how big the rendered tooltip really is so it can
@@ -32,7 +32,7 @@ export function Tooltip() {
     const loadConfig = async () => {
       try {
         const config = await window.electron.getUserConfig();
-        setShowTotalPrice(config.showTotalPrice ?? false);
+        setShowPerSlotPrice(config.showPerSlotPrice ?? true);
       } catch (error) {
         console.error("Failed to load tooltip config:", error);
       }
@@ -41,7 +41,7 @@ export function Tooltip() {
 
     // Listen for config changes
     const handleConfigChange = (config: any) => {
-      setShowTotalPrice(config.showTotalPrice ?? false);
+      setShowPerSlotPrice(config.showPerSlotPrice ?? true);
     };
 
     window.electron.onConfigChanged(handleConfigChange);
@@ -63,8 +63,11 @@ export function Tooltip() {
       item.prices.avgDay > item.prices.latest
         ? item.prices.latest
         : item.prices.avgDay;
+    const traderPrice = item?.prices?.trader?.price > 0 ? item.prices.trader.price : 0;
+    // Per-slot value only matters for items bigger than one cell
+    const perSlot = showPerSlotPrice && item.slots > 1;
     const fleaPricePerSlot = Math.ceil(fleaPriceToUse / item.slots);
-    const traderPricePerSlot = item?.prices?.trader?.price > 0 ? Math.ceil(item.prices.trader.price / item.slots) : 0;
+    const traderPricePerSlot = Math.ceil(traderPrice / item.slots);
 
     const visibleTasks = itemTasks.slice(0, MAX_TASK_ROWS);
     const hiddenTaskCount = itemTasks.length - visibleTasks.length;
@@ -76,23 +79,18 @@ export function Tooltip() {
           {item.shortName}
         </div>
 
-        {/* FLEA MARKET */}
+        {/* FLEA MARKET: what the whole item is worth, then per slot */}
         <div className="whitespace-nowrap">
           {item.availableOnFleaMarket ? (
             <>
               <span className="tracking-wider">
                 <span className="font-['Nunito']">₽</span>
-                {numberWithCommas(fleaPricePerSlot)}
+                {numberWithCommas(fleaPriceToUse)}
               </span>
-              {item.slots > 1 && (
-                <span>
-                  <span className="mr-1"></span>x {item.slots}
-                </span>
-              )}
-              {showTotalPrice && item.slots > 1 && (
-                <span className="ml-1 tracking-wider">
-                  (<span className="font-['Nunito']">₽</span>
-                  {numberWithCommas(fleaPriceToUse)})
+              {perSlot && (
+                <span className="ml-1.5 text-[12px] text-stone-500 tracking-wider">
+                  <span className="font-['Nunito']">₽</span>
+                  {numberWithCommas(fleaPricePerSlot)}/slot
                 </span>
               )}
             </>
@@ -105,23 +103,18 @@ export function Tooltip() {
         <div className="whitespace-nowrap">
           <span className="tracking-wider">
             <span className="font-['Nunito']">₽</span>
-            {numberWithCommas(traderPricePerSlot)}
+            {numberWithCommas(traderPrice)}
           </span>
-          {item.slots > 1 && (
-            <span>
-              <span className="mr-1"></span>x {item.slots}
-            </span>
-          )}
-          {showTotalPrice && item.slots > 1 && traderPricePerSlot > 0 && (
-            <span className="ml-1 tracking-wider">
-              (<span className="font-['Nunito']">₽</span>
-              {numberWithCommas(traderPricePerSlot * item.slots)})
-            </span>
-          )}
           <span className="capitalize">
             <span className="mr-1"></span>(
             {item.prices?.trader?.name ?? "N/A"})
           </span>
+          {perSlot && traderPrice > 0 && (
+            <span className="ml-1.5 text-[12px] text-stone-500 tracking-wider">
+              <span className="font-['Nunito']">₽</span>
+              {numberWithCommas(traderPricePerSlot)}/slot
+            </span>
+          )}
         </div>
 
         {/* TASKS & HIDEOUT */}

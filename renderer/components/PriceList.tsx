@@ -23,7 +23,13 @@ import ScannedSound from "../assets/item-scanned.wav";
 import UppedSound from "../assets/item-upped.wav";
 import ItemExistsSound from "../assets/item-exists.wav";
 import Settings from "./Settings";
-import { GameMode, getGameMode } from "../../models/UserConfig";
+import {
+  GameMode,
+  getGameMode,
+  DEFAULT_QUEST_PANEL_HOTKEY,
+  DEFAULT_QUEST_SCAN_HOTKEY,
+  DEFAULT_MAP_HOTKEY,
+} from "../../models/UserConfig";
 
 export default function PriceList() {
   const priceListHook = useHookstate(PRICE_LIST);
@@ -78,7 +84,12 @@ export default function PriceList() {
   const [enableIncrementLastItem, setEnableIncrementLastItem] = useState(true);
   const [enableScreenCalibration, setEnableScreenCalibration] = useState(true);
   const [gameMode, setGameMode] = useState<GameMode>("regular");
-  const [showTotalPrice, setShowTotalPrice] = useState(false);
+  const [showPerSlotPrice, setShowPerSlotPrice] = useState(true);
+  const [enableQuestPanel, setEnableQuestPanel] = useState(true);
+  const [questPanelHotkey, setQuestPanelHotkey] = useState(DEFAULT_QUEST_PANEL_HOTKEY);
+  const [eftLogsPath, setEftLogsPath] = useState("");
+  const [questScanHotkey, setQuestScanHotkey] = useState(DEFAULT_QUEST_SCAN_HOTKEY);
+  const [mapHotkey, setMapHotkey] = useState(DEFAULT_MAP_HOTKEY);
 
   // Reducer for calculating total loot value
   type TotalLootValueState = number;
@@ -141,7 +152,12 @@ export default function PriceList() {
         setEnableIncrementLastItem(config.enableIncrementLastItem ?? true);
         setEnableScreenCalibration(config.enableScreenCalibration ?? true);
         setGameMode(getGameMode(config));
-        setShowTotalPrice(config.showTotalPrice ?? false);
+        setShowPerSlotPrice(config.showPerSlotPrice ?? true);
+        setEnableQuestPanel(config.enableQuestPanel ?? true);
+        setQuestPanelHotkey(config.questPanelHotkey ?? DEFAULT_QUEST_PANEL_HOTKEY);
+        setEftLogsPath(config.eftLogsPath ?? "");
+        setQuestScanHotkey(config.questScanHotkey ?? DEFAULT_QUEST_SCAN_HOTKEY);
+        setMapHotkey(config.mapHotkey ?? DEFAULT_MAP_HOTKEY);
         // Apply volume to audio element - use setTimeout to defer until refs are ready
         const interval = setInterval(() => {
           if (itemScannedAudioRef.current && itemUppedAudioRef.current && itemExistsAudioRef.current) {
@@ -477,8 +493,18 @@ export default function PriceList() {
             onEnableScreenCalibrationChange={setEnableScreenCalibration}
             gameMode={gameMode}
             onGameModeChange={setGameMode}
-            showTotalPrice={showTotalPrice}
-            onShowTotalPriceChange={setShowTotalPrice}
+            showPerSlotPrice={showPerSlotPrice}
+            onShowPerSlotPriceChange={setShowPerSlotPrice}
+            enableQuestPanel={enableQuestPanel}
+            onEnableQuestPanelChange={setEnableQuestPanel}
+            questPanelHotkey={questPanelHotkey}
+            onQuestPanelHotkeyChange={setQuestPanelHotkey}
+            eftLogsPath={eftLogsPath}
+            onEftLogsPathChange={setEftLogsPath}
+            questScanHotkey={questScanHotkey}
+            onQuestScanHotkeyChange={setQuestScanHotkey}
+            mapHotkey={mapHotkey}
+            onMapHotkeyChange={setMapHotkey}
           />
         )}
         <div
