@@ -114,6 +114,9 @@ lib/setalwaysontop/x64
 *.dylib
 *.dll
 
+# The OCR helper's runtime DLLs must ship with the app
+!lib/ocr/*.dll
+
 # Fortran module files
 *.mod
 *.smod
