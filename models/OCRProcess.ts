@@ -26,6 +26,10 @@ export default class OCRProcess {
   // Miss-log throttle: remember recently logged OCR strings so a name the
   // scanner keeps re-reading is written to the log once, not every frame
   protected recentMissLog = new Map<string, number>();
+  // Cursor anchor (DIP) of the item currently shown, and the tooltip's last
+  // reported rendered size - used to keep the tooltip on the display
+  protected tooltipAnchor: { x: number; y: number } | null = null;
+  protected tooltipSize = { width: 200, height: 80 };
   protected user32: koffi.IKoffiLib;
   protected Point: koffi.IKoffiCType;
 
@@ -88,33 +92,46 @@ export default class OCRProcess {
     log.info(`OCR text did not match any item: "${text}"`);
   }
 
-  // Place the tooltip beside the cursor, flipping to the other side when
-  // its estimated size would run off the display (the window itself is a
-  // fixed 500x500 transparent canvas, so estimate the visible content)
+  // Place the tooltip beside the cursor, flipping to the other side when it
+  // would run off the display. Uses the last rendered size reported by the
+  // tooltip window (the window itself is a fixed transparent canvas)
   clampTooltipPosition(
     logicalPos: { x: number; y: number },
-    item: Item
+    size: { width: number; height: number }
   ): { x: number; y: number } {
-    const rows =
-      3 + Math.min(9, (item.tasks ?? []).filter((t) => t.status !== "done").length);
-    const estimatedHeight = 16 + rows * 21;
-    const estimatedWidth = 320;
     const offset = 13;
-
     const display = screen.getDisplayNearestPoint(logicalPos);
     const bounds = display.workArea ?? display.bounds;
 
     let x = logicalPos.x + offset;
     let y = logicalPos.y + offset;
 
-    if (x + estimatedWidth > bounds.x + bounds.width) {
-      x = Math.max(bounds.x, logicalPos.x - offset - estimatedWidth);
+    if (x + size.width > bounds.x + bounds.width) {
+      x = Math.max(bounds.x, logicalPos.x - offset - size.width);
     }
-    if (y + estimatedHeight > bounds.y + bounds.height) {
-      y = Math.max(bounds.y, logicalPos.y - offset - estimatedHeight);
+    if (y + size.height > bounds.y + bounds.height) {
+      y = Math.max(bounds.y, logicalPos.y - offset - size.height);
     }
 
     return { x: Math.round(x), y: Math.round(y) };
+  }
+
+  onTooltipSize(size: { width: number; height: number }): void {
+    if (!size || !(size.width > 0) || !(size.height > 0)) return;
+    this.tooltipSize = size;
+
+    // Re-place the current tooltip now that its real size is known
+    if (
+      this.tooltipAnchor &&
+      this.tooltipWindow &&
+      !this.tooltipWindow.isDestroyed()
+    ) {
+      const pos = this.clampTooltipPosition(this.tooltipAnchor, size);
+      const [currentX, currentY] = this.tooltipWindow.getPosition();
+      if (pos.x !== currentX || pos.y !== currentY) {
+        this.tooltipWindow.setPosition(pos.x, pos.y);
+      }
+    }
   }
 
   initialize(): void {
@@ -182,6 +199,7 @@ export default class OCRProcess {
       const text = new String(data);
       const incomingData = text.toString().trim();
       if (incomingData === "MOUSEMOVE") {
+        this.tooltipAnchor = null;
         if (this.tooltipWindow) {
           this.tooltipWindow.webContents.send(
             IpcConstants.NewTooltipItem,
@@ -306,9 +324,10 @@ export default class OCRProcess {
                   mousePos.x,
                   mousePos.y
                 );
+                this.tooltipAnchor = logicalPos;
                 const tooltipPos = this.clampTooltipPosition(
                   logicalPos,
-                  item
+                  this.tooltipSize
                 );
                 this.tooltipWindow.setPosition(tooltipPos.x, tooltipPos.y);
                 setTimeout(() => {

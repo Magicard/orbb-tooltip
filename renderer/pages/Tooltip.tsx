@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { TOOLTIP_ITEM } from "../state/tooltipItem";
 import { useHookstate } from "@hookstate/core";
 import { numberWithCommas } from "../../utils";
@@ -14,6 +14,19 @@ export function Tooltip() {
   const tooltipItem = useHookstate(TOOLTIP_ITEM);
   const item = tooltipItem.get().item;
   const [showTotalPrice, setShowTotalPrice] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Tell the main process how big the rendered tooltip really is so it can
+  // keep it on-screen without guessing (runs after every visible change)
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (item && el) {
+      window.electron.reportTooltipSize({
+        width: el.offsetWidth,
+        height: el.offsetHeight,
+      });
+    }
+  });
 
   useEffect(() => {
     const loadConfig = async () => {
@@ -57,7 +70,7 @@ export function Tooltip() {
     const hiddenTaskCount = itemTasks.length - visibleTasks.length;
 
     return (
-      <div className="block items-center p-1.5 bg-stone-900/95 border border-stone-700 rounded h-fit w-fit text-sm text-stone-300 font-['Bender'] font-black tracking-wide overflow-y-hidden">
+      <div ref={rootRef} className="block items-center p-1.5 bg-stone-900/95 border border-stone-700 rounded h-fit w-fit text-sm text-stone-300 font-['Bender'] font-black tracking-wide overflow-y-hidden">
         {/* ITEM NAME */}
         <div className="w-fit whitespace-nowrap text-[15px] text-white">
           {item.shortName}

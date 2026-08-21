@@ -37,9 +37,16 @@ type TarkovDevObjective = {
   type: string;
   count?: number;
   optional?: boolean;
+  // giveItem/plantItem: accepted items ("any of" when more than one)
   items?: string[];
+  // buildWeapon: the base weapon to modify
+  item?: string;
   foundInRaid?: boolean;
 };
+
+// "Any of" hand-in lists larger than this are too broad to show on every
+// eligible item's tooltip (e.g. "sell any 50 items", "any sniper rifle")
+const MAX_ANY_OF_ITEMS = 5;
 
 type TarkovDevTask = {
   id: string;
@@ -91,7 +98,13 @@ export type RequirementSource = {
   level?: number;
   // Other stations' levels that must be built first ("<stationId>-<level>")
   gateLevelIds: string[];
-  items: { itemId: string; count: number; foundInRaid: boolean }[];
+  items: {
+    itemId: string;
+    count: number;
+    foundInRaid: boolean;
+    // Size of the "any of" list this item belongs to (1 = specific item)
+    anyOf: number;
+  }[];
 };
 
 export type TrackerProgress = {
@@ -165,20 +178,36 @@ export default class TaskData {
     for (const task of tasks) {
       const items: RequirementSource["items"] = [];
       for (const objective of task.objectives ?? []) {
-        // Hand-over and plant objectives are what consume inventory items.
-        // Multi-item lists are "any of" choices (e.g. any stimulant) - too
-        // noisy to show on every eligible item's tooltip; currency
+        if (objective.optional) continue;
+
+        // Hand-over and plant objectives consume inventory items. Short
+        // "any of" lists are shown (tagged), huge ones are skipped; currency
         // hand-overs (e.g. "pay 100k roubles") are excluded like hideout costs
-        if (
-          (objective.type === "giveItem" || objective.type === "plantItem") &&
-          !objective.optional &&
-          objective.items?.length === 1 &&
-          !CURRENCY_ITEM_IDS.has(objective.items[0])
-        ) {
+        if (objective.type === "giveItem" || objective.type === "plantItem") {
+          const accepted = (objective.items ?? []).filter(
+            (id) => !CURRENCY_ITEM_IDS.has(id)
+          );
+          if (accepted.length === 0 || accepted.length > MAX_ANY_OF_ITEMS) {
+            continue;
+          }
+          for (const itemId of accepted) {
+            items.push({
+              itemId,
+              count: objective.count ?? 1,
+              foundInRaid: objective.foundInRaid ?? false,
+              anyOf: accepted.length,
+            });
+          }
+        }
+
+        // Gunsmith-style "modify this weapon" objectives - the game marks
+        // the base weapon as quest-needed, so show it too
+        if (objective.type === "buildWeapon" && objective.item) {
           items.push({
-            itemId: objective.items[0],
+            itemId: objective.item,
             count: objective.count ?? 1,
-            foundInRaid: objective.foundInRaid ?? false,
+            foundInRaid: false,
+            anyOf: 1,
           });
         }
       }
@@ -214,6 +243,7 @@ export default class TaskData {
             itemId: requirement.item,
             count: requirement.count ?? 1,
             foundInRaid: requirement.attributes?.foundInRaid ?? false,
+            anyOf: 1,
           });
         }
 
@@ -396,7 +426,10 @@ export default class TaskData {
 
       for (const requirement of source.items) {
         const entry: ItemTask = {
-          task: source.name,
+          task:
+            requirement.anyOf > 1
+              ? `${source.name} (any of ${requirement.anyOf})`
+              : source.name,
           count: requirement.count,
           inRaid: requirement.foundInRaid,
           kind: source.kind,

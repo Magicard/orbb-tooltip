@@ -26,6 +26,7 @@ declare global {
       toggleScreenCalibration: (enabled: boolean) => Promise<boolean>;
       // Exposed by the tooltip window's preload only (see ./tooltip.ts)
       onConfigChanged: (callback: (config: UserConfig) => void) => void;
+      reportTooltipSize: (size: { width: number; height: number }) => void;
     };
   }
 }

@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld("electron", {
   getUserConfig: () => {
     return ipcRenderer.invoke(IpcConstants.GetUserConfig);
   },
+  reportTooltipSize: (size: { width: number; height: number }) => {
+    ipcRenderer.send(IpcConstants.TooltipSize, size);
+  },
   onConfigChanged: (callback: (config: UserConfig) => void) => {
     ipcRenderer.on(
       IpcConstants.TooltipConfigChanged,

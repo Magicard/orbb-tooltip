@@ -454,6 +454,14 @@ try {
     const hotkeyUserConfig = getUserConfigData();
     registerHotkeys(hotkeyUserConfig);
 
+    // The tooltip window reports its rendered size so it can be kept on-screen
+    ipcMain.on(
+      IpcConstants.TooltipSize,
+      (_event, size: { width: number; height: number }) => {
+        ocr?.onTooltipSize(size);
+      }
+    );
+
     // IPC handlers for user config
     ipcMain.handle(IpcConstants.GetUserConfig, () => {
       return getUserConfigData();
