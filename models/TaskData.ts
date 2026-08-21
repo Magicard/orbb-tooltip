@@ -28,7 +28,7 @@ const LEGACY_TRACKER_HOST = "tarkovtracker.io";
 // The gateway rejects requests whose User-Agent is shorter than 5 chars,
 // and Electron's main-process fetch sends just "node"
 const TRACKER_USER_AGENT =
-  "flea-tooltip/1.0 (+https://github.com/Magicard/flea-tooltip)";
+  "orbb-tooltip/1.0 (+https://github.com/Magicard/orbb-tooltip)";
 
 const TRACKER_TIMEOUT_MS = 15 * 1000;
 
