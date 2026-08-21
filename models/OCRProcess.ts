@@ -23,6 +23,9 @@ export default class OCRProcess {
   protected priceListWindow: BrowserWindow;
   protected items: Items;
   protected itemNamesLowerCaseList: string[] = [];
+  // Miss-log throttle: remember recently logged OCR strings so a name the
+  // scanner keeps re-reading is written to the log once, not every frame
+  protected recentMissLog = new Map<string, number>();
   protected user32: koffi.IKoffiLib;
   protected Point: koffi.IKoffiCType;
 
@@ -69,6 +72,49 @@ export default class OCRProcess {
       x: Math.round(physicalX / scaleFactor),
       y: Math.round(physicalY / scaleFactor),
     };
+  }
+
+  logMiss(text: string): void {
+    const now = Date.now();
+    const lastLogged = this.recentMissLog.get(text) ?? 0;
+    if (now - lastLogged < 5 * 60 * 1000) return;
+
+    this.recentMissLog.set(text, now);
+    if (this.recentMissLog.size > 200) {
+      // Drop the oldest entry; the map preserves insertion order
+      const oldest = this.recentMissLog.keys().next().value;
+      if (oldest !== undefined) this.recentMissLog.delete(oldest);
+    }
+    log.info(`OCR text did not match any item: "${text}"`);
+  }
+
+  // Place the tooltip beside the cursor, flipping to the other side when
+  // its estimated size would run off the display (the window itself is a
+  // fixed 500x500 transparent canvas, so estimate the visible content)
+  clampTooltipPosition(
+    logicalPos: { x: number; y: number },
+    item: Item
+  ): { x: number; y: number } {
+    const rows =
+      3 + Math.min(9, (item.tasks ?? []).filter((t) => t.status !== "done").length);
+    const estimatedHeight = 16 + rows * 21;
+    const estimatedWidth = 320;
+    const offset = 13;
+
+    const display = screen.getDisplayNearestPoint(logicalPos);
+    const bounds = display.workArea ?? display.bounds;
+
+    let x = logicalPos.x + offset;
+    let y = logicalPos.y + offset;
+
+    if (x + estimatedWidth > bounds.x + bounds.width) {
+      x = Math.max(bounds.x, logicalPos.x - offset - estimatedWidth);
+    }
+    if (y + estimatedHeight > bounds.y + bounds.height) {
+      y = Math.max(bounds.y, logicalPos.y - offset - estimatedHeight);
+    }
+
+    return { x: Math.round(x), y: Math.round(y) };
   }
 
   initialize(): void {
@@ -149,6 +195,12 @@ export default class OCRProcess {
         // eslint-disable-next-line no-control-regex
         const incomingDataCleanedUp = incomingData.replace(/[^\x00-\x7F]/g, "");
         let itemName = incomingDataCleanedUp.split("||")[0];
+
+        // ocr_cpp emits "IGNORE||<reason>" control lines for non-item
+        // reads - never treat those as an item name to search for
+        if (itemName.trim().toUpperCase() === "IGNORE") {
+          return;
+        }
         const coords = incomingDataCleanedUp.split("||")[1];
         const x = parseInt(coords.split(",")[0]);
         const y = parseInt(coords.split(",")[1]);
@@ -206,6 +258,12 @@ export default class OCRProcess {
               );
             }
           }
+
+          // Log misses so "hovered but nothing happened" is diagnosable
+          // from the log file (raw OCR text vs. the item database)
+          if (!item && itemName.trim().length >= 3) {
+            this.logMiss(itemName.trim());
+          }
         }
 
         if (item && item.name !== "T H I C C item case") {
@@ -248,10 +306,11 @@ export default class OCRProcess {
                   mousePos.x,
                   mousePos.y
                 );
-                this.tooltipWindow.setPosition(
-                  logicalPos.x + 13,
-                  logicalPos.y + 13
+                const tooltipPos = this.clampTooltipPosition(
+                  logicalPos,
+                  item
                 );
+                this.tooltipWindow.setPosition(tooltipPos.x, tooltipPos.y);
                 setTimeout(() => {
                   this.tooltipWindow.setBounds({ width: 500, height: 500 });
                 }, 10);
