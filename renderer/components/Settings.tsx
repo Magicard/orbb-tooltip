@@ -655,7 +655,7 @@ export default function Settings({
           <div>
             <h3 className="text-lg font-semibold mb-2">Need help?</h3>
             <p className="text-sm text-stone-300">
-              For help or more info about the project, go to our website <a href="https://fleatooltip.com" className="text-green-500 hover:text-green-600">fleatooltip.com</a>
+              For help or more info about the project, see <a href="https://github.com/Magicard/orbb-tooltip" target="_blank" rel="noreferrer" className="text-green-500 hover:text-green-600">github.com/Magicard/orbb-tooltip</a>
             </p>
           </div>
 

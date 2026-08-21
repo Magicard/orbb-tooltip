@@ -1,8 +1,8 @@
-# FleaTooltip (revived fork)
+# ORBB ToolTip
 
 In-game price-checker overlay for Escape from Tarkov. Hover an item in your stash or inventory and a tooltip shows its current flea market and trader prices — no alt-tabbing.
 
-This is a fork of [sammereye/flea-tooltip](https://github.com/sammereye/flea-tooltip). The upstream app (and the installer from fleatooltip.com) stopped working in July 2026 when the tarkov.dev GraphQL API went offline — it would crash on startup with `Cannot read properties of undefined (reading 'items')` while "Fetching Item Prices from Database".
+ORBB ToolTip is a fork of [sammereye/flea-tooltip](https://github.com/sammereye/flea-tooltip) (FleaTooltip). The upstream app (and the installer from fleatooltip.com) stopped working in July 2026 when the tarkov.dev GraphQL API went offline — it would crash on startup with `Cannot read properties of undefined (reading 'items')` while "Fetching Item Prices from Database".
 
 ## What this fork changes
 
@@ -42,7 +42,7 @@ npm start
 npm run package
 ```
 
-produces the app in `out/FleaTooltip-win32-x64/`. Press **F6** in-app the first time to calibrate scanning for your screen.
+produces the app in `out/ORBBToolTip-win32-x64/`. Press **F6** in-app the first time to calibrate scanning for your screen.
 
 ## Hotkeys
 

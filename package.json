@@ -2,12 +2,12 @@
   "name": "tarkov-price-tooltip",
   "productName": "tarkov-price-tooltip",
   "version": "1.4.0",
-  "description": "In-Game Tarkov Market Checker",
+  "description": "ORBB ToolTip - in-game Escape from Tarkov price and quest overlay",
   "main": "./.webpack/main",
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
-    "postpackage": "powershell -Command \"Move-Item -Path './out/FleaTooltip-win32-x64/resources/eng.traineddata' -Destination './out/FleaTooltip-win32-x64/'\"",
+    "postpackage": "powershell -Command \"Move-Item -Path './out/ORBBToolTip-win32-x64/resources/eng.traineddata' -Destination './out/ORBBToolTip-win32-x64/'\"",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx ."

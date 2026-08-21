@@ -6,6 +6,9 @@ import {
 import { getUserConfigData, setUserConfigData } from "../services/config";
 import { UserConfig } from "../../models/UserConfig";
 import log from "electron-log";
+import path from "path";
+import { app } from "electron";
+import { isDev } from "../../utils";
 
 export async function openMainWindow(
   webpackEntry: string,
@@ -38,11 +41,15 @@ async function createMainWindow(webpackEntry: string, preloadEntry: string) {
     frame: !userConfig.isFrameless,
     autoHideMenuBar: true,
     transparent: userConfig.isFrameless,
+    title: "ORBB ToolTip",
+    icon: isDev()
+      ? path.join(app.getAppPath(), "icon.ico")
+      : path.join(process.resourcesPath, "icon.ico"),
   };
 
   const win = new BrowserWindow(config);
 
-  // External links (tarkovtracker.io, fleatooltip.com, ...) open in the
+  // External links (tarkovtracker.org, GitHub, ...) open in the
   // default browser instead of navigating the app window away
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://") || url.startsWith("http://")) {

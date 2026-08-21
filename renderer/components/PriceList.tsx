@@ -426,8 +426,8 @@ export default function PriceList() {
             PLEASE RESTART THIS APPLICATION TO SAVE CHANGES
           </p>
           <p className="text-sm">
-            If you are still running into issues, please join our Discord for
-            assistance.
+            If you are still running into issues, open an issue on GitHub
+            (Settings &gt; help).
           </p>
         </div>
       );
