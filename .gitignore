@@ -91,9 +91,16 @@ typings/
 # Electron-Forge
 out/
 
-lib/ocr_cpp/.vs
-lib/ocr_cpp/x64
-lib/setalwaysontop/x64
+# MSVC intermediate output and per-user settings for the native helpers
+lib/**/.vs/
+lib/**/x64/
+lib/**/Debug/
+lib/**/Release/
+lib/**/*.vcxproj.user
+lib/**/*.iobj
+lib/**/*.ipdb
+lib/**/*.recipe
+lib/**/*.FileListAbsolute.txt
 *.tlog
 
 # Prerequisites

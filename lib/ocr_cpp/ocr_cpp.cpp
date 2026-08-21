@@ -405,6 +405,8 @@ int main(int argc, char* argv[])
 
 	short horizontalCheckpoints[3] = { 50, 15, 5 };
 	short verticalCheckpoints[3] = { -15, -5, -2 };
+	// Negative steps: walk left along the bottom border to the true corner
+	short leftwardCheckpoints[4] = { -50, -15, -5, -1 };
 	
 	// Optimized polling loop (optimization #7)
 	int sleepInterval = 25; // Default sleep interval
@@ -412,8 +414,12 @@ int main(int argc, char* argv[])
 	while (true) {
 		if (GetCursorPos(&mousePos)) {
 			if (lastValidMousePos.x == mousePos.x && lastValidMousePos.y == mousePos.y) {
-				mouseStationaryCount++;
-				sleepInterval = 25; // Normal interval when stationary
+				if (mouseStationaryCount < 1000) mouseStationaryCount++; // capped: a short would wrap after ~13 min
+				// Normal interval when stationary; after ~2s with nothing found
+				// (e.g. the cursor locked at screen centre for a whole raid) back
+				// off to 100ms so the screen capture runs 10x/s instead of 40x/s.
+				// Any mouse movement resets this, so hover latency is unaffected.
+				sleepInterval = (mouseStationaryCount > 80 && !foundTooltip) ? 100 : 25;
 			}
 			else
 			{
@@ -474,6 +480,26 @@ int main(int argc, char* argv[])
 					//cout << bottomLeftBorderPoint.x << ',' << bottomLeftBorderPoint.y << endl;
 
 					foundTooltip = true;
+
+					// Near the right edge of the screen the game shifts its tooltip
+					// left to keep it on-screen, so the calibrated point lands somewhere
+					// along the bottom border rather than on the bottom-left corner.
+					// Walk left along the border to find the real corner first; the
+					// one-off wider capture gives that walk pixel data to read from.
+					{
+						int wideX = bottomLeftBorderPoint.x - 900;
+						int wideY = bottomLeftBorderPoint.y - 200;
+						if (wideX < 0) wideX = 0;
+						if (wideY < 0) wideY = 0;
+						capturePixelRegion(cachedDesktopDC, wideX, wideY, 1500, 300, true);
+
+						short leftOffset = 0;
+						for (short step : leftwardCheckpoints) {
+							getBottomRightBorderPoint(bottomLeftBorderPoint.x, bottomLeftBorderPoint.y, red, green, blue, leftOffset, step);
+						}
+						bottomLeftBorderPoint.x += leftOffset; // leftOffset <= 0
+					}
+
 					for (short i = 0; i < std::size(horizontalCheckpoints); i++) {
 						checkRange = horizontalCheckpoints[i];
 						getBottomRightBorderPoint(bottomLeftBorderPoint.x, bottomLeftBorderPoint.y, red, green, blue, offsetX, checkRange);

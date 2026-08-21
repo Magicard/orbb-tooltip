@@ -1,2 +1,0 @@
-C:\Users\Sammer\Desktop\tarkovoverlay\lib\ocr_cpp\ocr_cpp\x64\Release\ocr_cpp.vcxproj.Up2Date
-C:\Users\iamsa\Documents\GitHub\tarkov-price-checker\lib\ocr_cpp\ocr_cpp\x64\Release\ocr_cpp.vcxproj.Up2Date

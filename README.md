@@ -36,6 +36,16 @@ npm install
 npm start
 ```
 
+## Rebuilding the OCR scanner (optional)
+
+`lib/ocr/ocr_cpp.exe` is prebuilt. To change it (`lib/ocr_cpp/ocr_cpp.cpp`) you need Visual Studio 2022 Build Tools with the C++ workload and [vcpkg](https://github.com/microsoft/vcpkg) with `tesseract:x64-windows` installed and `vcpkg integrate install` run. Then:
+
+```
+msbuild lib\ocr_cpp\ocr_cpp.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+```
+
+The build outputs the exe and copies the matching runtime DLLs into `lib/ocr/`.
+
 ## Building a distributable
 
 ```
