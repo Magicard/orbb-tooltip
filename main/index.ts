@@ -327,20 +327,23 @@ try {
     }
 
     items = new Items();
-    const initialUserConfig = getUserConfigData();
-    items
-      .fetchItems(
-        initialUserConfig.tarkovMarketApiKey,
-        initialUserConfig.usePveMode
-      )
-      .then(async () => {
+    const startItemsFetch = () => {
+      const initialUserConfig = getUserConfigData();
+      items
+        .fetchItems(
+          initialUserConfig.tarkovMarketApiKey,
+          initialUserConfig.usePveMode
+        )
+        .then(async () => {
         setInterval(() => {
           console.log("Refetching updated data");
           const userConfig = getUserConfigData();
-          items.fetchItems(
-            userConfig.tarkovMarketApiKey,
-            userConfig.usePveMode
-          );
+          items
+            .fetchItems(userConfig.tarkovMarketApiKey, userConfig.usePveMode)
+            .catch((error) => {
+              // Keep serving the previously fetched prices if a refetch fails
+              log.warn("Periodic item refetch failed:", error);
+            });
         }, 1000 * 60 * 15);
 
         // Initialize search index with retry logic
@@ -407,12 +410,18 @@ try {
           IpcConstants.ItemsDatabaseReady
         );
       })
-      .catch((error) => {
-        console.log("FAILED TO FETCH ITEMS FROM API:", error);
-        BrowserWindow.getAllWindows()[0].webContents.send(
-          IpcConstants.ItemsDatabaseFailed
-        );
-      });
+        .catch((error) => {
+          console.log("FAILED TO FETCH ITEMS FROM API:", error);
+          log.warn("Initial item fetch failed, retrying in 60 seconds", error);
+          BrowserWindow.getAllWindows()[0]?.webContents.send(
+            IpcConstants.ItemsDatabaseFailed
+          );
+          // The price API can be temporarily down (that is what killed the
+          // app originally) - keep retrying instead of requiring a restart
+          setTimeout(startItemsFetch, 60 * 1000);
+        });
+    };
+    startItemsFetch();
 
     // FOR SOME REASON THESE BREAK THE APP WHEN PACKAGED |||||||||||||||||||||||||||||| WARNING
     // const tray = new Tray(path.join(app.getAppPath(), "/favicon.ico"));

@@ -449,10 +449,23 @@ export default function Settings({
       config.usePveMode = enabled;
       await window.electron.setUserConfig(config);
 
-      // Refetch items with new PvE mode setting
-      await window.electron.refetchItems();
+      // Refetch items with new PvE mode setting; revert the toggle if the
+      // refetch fails so we never silently serve the other mode's prices
+      const refetched = await window.electron.refetchItems();
+      if (!refetched) {
+        throw new Error("Refetch with new PvE mode failed");
+      }
     } catch (error) {
       console.error("Failed to save user config or refetch items:", error);
+      setLocalUsePveMode(!enabled);
+      onUsePveModeChange(!enabled);
+      try {
+        const config: UserConfig = await window.electron.getUserConfig();
+        config.usePveMode = !enabled;
+        await window.electron.setUserConfig(config);
+      } catch (revertError) {
+        console.error("Failed to revert PvE mode config:", revertError);
+      }
     }
   };
 

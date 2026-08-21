@@ -4,8 +4,8 @@ export function isDev() {
   return process.env["WEBPACK_SERVE"] === "true";
 }
 
-export function numberWithCommas(x: number | undefined) {
-  if (x === undefined) {
+export function numberWithCommas(x: number | null | undefined) {
+  if (x === undefined || x === null) {
     return x;
   }
 

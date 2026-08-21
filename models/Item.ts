@@ -12,7 +12,7 @@ export default class Item {
 type ItemPrices = {
   latest: number;
   avgDay: number;
-  avgWeek: number;
+  avgWeek?: number;
   trader: TraderPrice;
 };
 
