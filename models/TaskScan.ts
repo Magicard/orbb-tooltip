@@ -18,7 +18,16 @@ export type ScannedTask = {
   status: string;
   location: string;
   at: number;
+  // How many separate scan passes read this same name. A task no catalog
+  // knows (a rotating Operational one) is only believed once it has been
+  // read the same way twice, which OCR garbage almost never manages
+  seen?: number;
 };
+
+// Passes an unknown name must be read in before it is shown
+const UNKNOWN_CONFIRMATIONS = 2;
+// Two passes closer together than this are treated as the same reading
+const CONFIRMATION_GAP_MS = 900;
 
 export type ScannedObjective = {
   key: string; // normalized objective text
@@ -34,8 +43,15 @@ export type ScannedObjectiveState = {
   taskId: string;
   text: string;
   done: boolean;
+  // Counter shown on the row ("3/5"), when it has one
+  count?: number;
+  total?: number;
   at: number;
 };
+
+// A stray token OCR makes of the icons around an objective row: no real
+// letters in it, or a short run of capitals
+const STRAY_TOKEN = /^[^A-Za-z0-9]*.?[^A-Za-z0-9]*$|^[A-Z]{1,2}$/;
 
 type Word = {
   left: number;
@@ -105,6 +121,14 @@ export default class TaskScan {
     return this.tasks;
   }
 
+  // Tasks read off the screen that no catalog knows - the rotating
+  // Operational ones - excluding single reads, which are usually OCR noise
+  getUnknownTasks(): ScannedTask[] {
+    return [...this.tasks.values()].filter(
+      (t) => !t.taskId && (t.seen ?? 1) >= UNKNOWN_CONFIRMATIONS
+    );
+  }
+
   getObjectives(): Map<string, ScannedObjective> {
     return this.objectives;
   }
@@ -171,7 +195,11 @@ export default class TaskScan {
   // Completion read off the Tasks screen for one objective of a task:
   // true / false when its row was seen, undefined when it never was
   doneFor(taskId: string, objectiveText: string): boolean | undefined {
-    return this.objectiveStates.get(`${taskId}|${normalizeName(objectiveText)}`)?.done;
+    return this.stateFor(taskId, objectiveText)?.done;
+  }
+
+  stateFor(taskId: string, objectiveText: string): ScannedObjectiveState | undefined {
+    return this.objectiveStates.get(`${taskId}|${normalizeName(objectiveText)}`);
   }
 
   percentFor(taskId: string): number | undefined {
@@ -209,9 +237,9 @@ export default class TaskScan {
     const rows = groupRows(words);
     const now = Date.now();
     const index = buildNameIndex(catalog);
-    // Objective rows of the task open on the screen: text + whether the
-    // game's completion tick follows it
-    const objectiveRows: { text: string; done: boolean }[] = [];
+    // Objective rows of the task open on the screen: text, whether the
+    // game's completion tick follows it, and the counter if it has one
+    const objectiveRows: { text: string; done: boolean; count?: number; total?: number }[] = [];
     // Keyed by the sorted word set so a map name the game wrapped onto two
     // lines ("Streets of" / "Tarkov", read back as "Streets Tarkov of") is
     // still recognised; the value is the name to display
@@ -239,11 +267,11 @@ export default class TaskScan {
         const count = Number(countMatch[1]);
         const total = Number(countMatch[2]);
         if (total > 0 && count <= total) {
-          const text = stripTrailingCount(joined);
+          const text = stripStrayTokens(stripTrailingCount(joined).split(/\s+/)).join(" ");
           const key = normalizeName(text);
           if (key.length >= 8) {
             this.objectives.set(key, { key, text, count, total, at: now });
-            objectiveRows.push({ text, done: count >= total });
+            objectiveRows.push({ text, done: count >= total, count, total });
             objectiveCount++;
             continue;
           }
@@ -252,13 +280,9 @@ export default class TaskScan {
 
       // ---- objective row without a counter: "<text>" or "<text> [tick]" ----
       if (row.length >= 4 && !texts.some((t) => PERCENT_PATTERN.test(t))) {
-        const trimmed = [...row];
         // The row starts with an icon and may end with the tick itself,
         // both of which OCR turns into a stray short token
-        while (trimmed.length > 3 && /^[^A-Za-z0-9]*.?[^A-Za-z0-9]*$/.test(trimmed[0].text)) trimmed.shift();
-        while (trimmed.length > 3 && /^[^A-Za-z0-9]*.?[^A-Za-z0-9]*$/.test(trimmed[trimmed.length - 1].text)) {
-          trimmed.pop();
-        }
+        const trimmed = stripStrayTokens(row, (w) => w.text);
         const text = trimmed.map((w) => w.text).join(" ");
         if (normalizeName(text).length >= 12) {
           const tail = trimmed[trimmed.length - 1];
@@ -298,9 +322,22 @@ export default class TaskScan {
       const read = texts.slice(0, nameEnd).join(" ").trim();
       if (read.length < 3) continue;
 
-      const resolved = resolveTaskName(index, catalog, read, mapWords);
+      // A map name at the end of the name column is a wrapped location that
+      // leaked in - unless the row already found its own location, in which
+      // case it is part of the name ("Eliminate Scavs on Lighthouse")
+      const resolved = resolveTaskName(
+        index,
+        catalog,
+        read,
+        location ? new Set<string>() : mapWords
+      );
       if (!resolved) continue;
       const key = resolved.taskId ? `id:${resolved.taskId}` : normalizeName(resolved.name);
+      const previous = this.tasks.get(key);
+      const seen =
+        previous && now - previous.at >= CONFIRMATION_GAP_MS
+          ? (previous.seen ?? 1) + 1
+          : previous?.seen ?? 1;
       this.tasks.set(key, {
         key,
         name: resolved.name,
@@ -309,6 +346,7 @@ export default class TaskScan {
         status,
         location,
         at: now,
+        seen,
       });
       taskRows++;
     }
@@ -331,7 +369,7 @@ export default class TaskScan {
   // so find the active task whose objectives they match best and record
   // each matched row's done / not-done state for it
   private applyObjectiveRows(
-    rows: { text: string; done: boolean }[],
+    rows: { text: string; done: boolean; count?: number; total?: number }[],
     catalog: CatalogTask[],
     activeTaskIds: Iterable<string>,
     now: number
@@ -376,13 +414,23 @@ export default class TaskScan {
     let changed = 0;
     for (const [i, objective] of best.matches) {
       const key = `${best.task.id}|${normalizeName(objective.text)}`;
+      const row = rows[i];
       const previous = this.objectiveStates.get(key);
-      if (previous && previous.done === rows[i].done) continue;
+      if (
+        previous &&
+        previous.done === row.done &&
+        previous.count === row.count &&
+        previous.total === row.total
+      ) {
+        continue;
+      }
       this.objectiveStates.set(key, {
         key,
         taskId: best.task.id,
         text: objective.text,
-        done: rows[i].done,
+        done: row.done,
+        count: row.count,
+        total: row.total,
         at: now,
       });
       changed++;
@@ -391,7 +439,11 @@ export default class TaskScan {
       log.info(
         `Tasks screen: ${best.task.name} - ` +
           [...best.matches.entries()]
-            .map(([i, o]) => `${rows[i].done ? "[x]" : "[ ]"} ${o.text.slice(0, 40)}`)
+            .map(
+              ([i, o]) =>
+                `${rows[i].done ? "[x]" : "[ ]"} ${o.text.slice(0, 40)}` +
+                (rows[i].total ? ` ${rows[i].count}/${rows[i].total}` : "")
+            )
             .join(", ")
       );
     }
@@ -409,7 +461,12 @@ export default class TaskScan {
     for (const m of ["Any location", ...mapNames]) locations.set(wordSetKey(m), m);
     let changed = false;
     for (const [key, task] of [...this.tasks.entries()]) {
-      const resolved = resolveTaskName(index, catalog, task.name, mapWords);
+      const resolved = resolveTaskName(
+        index,
+        catalog,
+        task.name,
+        task.location ? new Set<string>() : mapWords
+      );
       const wanted = resolved
         ? resolved.taskId
           ? `id:${resolved.taskId}`
@@ -430,6 +487,7 @@ export default class TaskScan {
         name: resolved.name,
         taskId: resolved.taskId,
         location,
+        seen: Math.max(task.seen ?? 1, existing?.seen ?? 1),
       });
     }
     if (changed) this.save();
@@ -510,6 +568,15 @@ function groupRows(words: Word[]): Word[][] {
   return rows;
 }
 
+// Drop stray icon / tick tokens from both ends of a row (never below three
+// tokens, so a short real name survives)
+function stripStrayTokens<T>(tokens: T[], text: (t: T) => string = (t) => String(t)): T[] {
+  const out = [...tokens];
+  while (out.length > 3 && STRAY_TOKEN.test(text(out[0]))) out.shift();
+  while (out.length > 3 && STRAY_TOKEN.test(text(out[out.length - 1]))) out.pop();
+  return out;
+}
+
 function stripTrailingCount(text: string): string {
   return text.replace(/\s*\d{1,4}\s*\/\s*\d{1,4}\s*$/, "").trim();
 }
@@ -573,6 +640,24 @@ function matchExact(index: MiniSearch, catalog: CatalogTask[], read: string): st
   return null;
 }
 
+// Longest catalog name that appears whole inside the text as read (or that
+// the text is a whole part of), which is how a garbled prefix ("Ne a ie | - |
+// The Tarkov Shooter") or a location that leaked in ("Rough Tarkov Any
+// location") still resolves to its real quest
+function matchContained(catalog: CatalogTask[], read: string): string | null {
+  const wanted = ` ${normalizeName(read)} `;
+  if (wanted.length < 10) return null;
+  let best: { id: string; length: number } | null = null;
+  for (const task of catalog) {
+    const name = normalizeName(task.name);
+    // Short names ("Debut", "Setup") would match inside all sorts of text
+    if (name.length < 9) continue;
+    if (!wanted.includes(` ${name} `)) continue;
+    if (!best || name.length > best.length) best = { id: task.id, length: name.length };
+  }
+  return best?.id ?? null;
+}
+
 // The Tasks screen prefixes every name with the trader / task-type icons,
 // which OCR reads as stray letters ("BE Ice Cream Cones", "KA ® Secret
 // Message", "le B Bad Habit"). Match the text as read first, then with up to
@@ -602,13 +687,23 @@ function matchTask(
       }
     }
   }
-  return null;
+  return matchContained(catalog, read);
 }
 
 // A leading word that is icon junk rather than part of a name: has digits or
 // symbols in it, is a short run of capitals ("BE", "KA", "F"), or starts in
 // lower case (names are title-cased)
 const JUNK_WORD = /[^A-Za-z'\u2019-]|^[A-Z]{1,3}$|^[a-z]/;
+
+// Characters that appear in real quest names; anything else (pipes, "=",
+// stray symbols) means the row was misread rather than unknown
+const NAME_CHARS = /^[A-Za-z0-9 '\u2019\u2013\u2014:,.!?()&/+-]+$/;
+// Short tokens that do occur in real names; any other 1-2 character token is
+// OCR debris ("Ne a ie | - | The Tarkov fe")
+const SHORT_WORDS = new Set([
+  "a", "an", "of", "to", "in", "on", "at", "is", "it", "no", "up", "so", "my",
+  "we", "us", "i", "the", "and", "for", "by", "or", "vs", "pt",
+]);
 
 // Names no catalog knows (the rotating Operational tasks) are only kept
 // when they still look like a name once the icon junk is stripped: two or
@@ -627,6 +722,11 @@ function cleanUnknownName(
   const properWords = tokens.filter((t) => /^[A-Za-z'\u2019-]{2,}$/.test(t)).length;
   if (tokens.length < 2 || properWords < 2 || letters < 8) return null;
   if (letters / Math.max(1, name.replace(/\s/g, "").length) < 0.8) return null;
+  if (!NAME_CHARS.test(name)) return null;
+  const debris = tokens.filter(
+    (t) => t.length <= 2 && !SHORT_WORDS.has(t.toLowerCase())
+  ).length;
+  if (debris >= 2) return null;
   const wanted = ` ${normalizeName(name)} `;
   const fragment = catalog.some((t) => {
     const full = ` ${normalizeName(t.name)} `;

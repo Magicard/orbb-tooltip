@@ -40,6 +40,9 @@ export default class IpcConstants {
   static QuestPanelSelectMap = "quest-panel-select-map";
   static QuestPanelScroll = "quest-panel-scroll";
   static QuestPanelOpacity = "quest-panel-opacity";
+  static QuestPanelScanStatus = "quest-panel-scan-status";
+  static QuestPanelScanStatusRequest = "quest-panel-scan-status-request";
+  static QuestPanelToggleScan = "quest-panel-toggle-scan";
   static QuestPanelClose = "quest-panel-close";
   static QuestPanelToggleMap = "quest-panel-toggle-map";
   static MapWindowData = "map-window-data";

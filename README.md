@@ -120,7 +120,7 @@ Trackers only learn about *completed* objectives, so a kill counter sits at 0/5 
 | **F6** | Screen calibration |
 | **`'`** | Slide the quest panel in / out (changeable in settings) |
 | **`[`** | Show / hide the map window (changeable) |
-| **`]`** | Read progress off the game's Tasks screen (changeable) |
+| **`]`** | Start / stop reading progress off the game's Tasks screen (changeable) |
 | **F12** | Developer tools |
 
 Each hotkey can be switched off in settings if it clashes with something.
@@ -157,6 +157,8 @@ No. Measured idle while the game runs: the whole thing uses about **2% of one CP
 1. A small native helper (`ocr_cpp.exe`, Tesseract OCR) watches the screen around your cursor for the game's tooltip border and reads the item name.
 2. The Electron main process matches that name against a fuzzy index of all ~5,300 items and looks up prices, quest and hideout requirements (from `json.tarkov.dev`) and your TarkovTracker progress.
 3. A transparent always-on-top window draws the tooltip beside your cursor.
+
+**The Tasks-screen scan (`]`)** works the same way, just on the whole screen: for up to ~45 seconds it OCRs everything every 2 seconds. `]` (or the scanner box at the top of the quest panel) toggles it on and off, and that box always shows whether the scanner is running, how long is left and how many tasks it has read. From each pass it picks out task rows (name · map · status · percent), the open task's objective rows (text, "3/5" counters, and whether the game's cyan tick follows the text), and matches them against the quest catalog, tolerating the stray letters OCR makes of the icons. Only what's on screen can be read, so scroll the list and click through the quests you care about. Everything it learns is kept in `task-scan.json` and merged with TarkovTracker and the game's own logs.
 
 ---
 

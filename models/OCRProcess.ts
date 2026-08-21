@@ -34,6 +34,21 @@ export default class OCRProcess {
   // On-demand full-screen OCR (Tasks screen scan): output collected between
   // SCANRESULT_BEGIN / SCANRESULT_END markers
   protected scanBuffer: string | null = null;
+  // Inside a SCANRESULT_BEGIN ... SCANRESULT_END block
+  protected scanCollecting = false;
+  // Partial stdout line carried over between chunks
+  protected lineBuffer = "";
+  // Desired state of the helper's Ctrl+wheel hook, re-applied on restart
+  protected wheelHookWanted = false;
+  protected stopping = false;
+  // Last time anything at all was heard from the helper (it heartbeats
+  // every 5s), and the watchdog that restarts it when it goes quiet
+  protected lastHelperOutput = 0;
+  protected watchdogTimer: NodeJS.Timeout | null = null;
+  protected restartHelper: (() => void) | null = null;
+  // When the current SCANRESULT block started, so a truncated one cannot
+  // swallow the tooltip stream forever
+  protected scanCollectStart = 0;
   protected scanResolve: ((tsv: string) => void) | null = null;
   protected scanReject: ((error: Error) => void) | null = null;
   protected scanTimer: NodeJS.Timeout | null = null;
@@ -163,7 +178,20 @@ export default class OCRProcess {
         )
       : log.info("Initializing OCR process");
 
-    // const ocrProcess = ;
+    this.spawnHelper(redValue, greenValue, blueValue);
+  }
+
+  // Stop the helper for good (app quitting): no restart
+  shutdown(): void {
+    this.stopping = true;
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+    this.watchdogTimer = null;
+    if (this.ocrProcess && !this.ocrProcess.killed) this.ocrProcess.kill();
+  }
+
+  private spawnHelper(redValue: number, greenValue: number, blueValue: number): void {
+    this.lineBuffer = "";
+    this.scanCollecting = false;
     const ocrProcess = isDev()
       ? spawn(path.join(app.getAppPath(), "/lib/ocr/ocr_cpp.exe"), [
           redValue.toString(),
@@ -188,16 +216,54 @@ export default class OCRProcess {
       isDev() ? console.log("stderr: " + data) : log.error("stderr: " + data);
     });
 
-    ocrProcess.on("close", function (code) {
+    ocrProcess.on("close", (code) => {
       isDev()
         ? console.log("closing code: " + code)
         : log.info("closing code: " + code);
+      if (this.ocrProcess !== ocrProcess) return;
+      this.ocrProcess = null;
+      // A pending scan can never complete now
+      if (this.scanResolve || this.scanReject) this.finishScan(null);
+      if (this.stopping) return;
+      // The helper died: bring it back, with the wheel hook as it was
+      log.warn("OCR helper exited unexpectedly - restarting in 2s");
+      setTimeout(() => {
+        if (this.stopping || this.ocrProcess) return;
+        this.spawnHelper(redValue, greenValue, blueValue);
+      }, 2000);
     });
+
+    if (this.wheelHookWanted) ocrProcess.stdin.write("WHEELHOOK ON\n");
+
+    // Watchdog: the helper heartbeats every 5s, so silence means it is
+    // wedged (a hung OCR call, a blocked write) - kill it and let the
+    // close handler bring a fresh one up
+    this.lastHelperOutput = Date.now();
+    this.restartHelper = () => this.spawnHelper(redValue, greenValue, blueValue);
+    if (!this.watchdogTimer) {
+      this.watchdogTimer = setInterval(() => {
+        if (this.stopping) return;
+        if (!this.ocrProcess) {
+          // Died without the close handler restarting it (or too early)
+          if (Date.now() - this.lastHelperOutput > 15 * 1000) {
+            this.lastHelperOutput = Date.now();
+            log.warn("OCR helper is not running - starting it again");
+            this.restartHelper?.();
+          }
+          return;
+        }
+        const silence = Date.now() - this.lastHelperOutput;
+        if (silence > 20 * 1000) {
+          log.warn(`OCR helper silent for ${Math.round(silence / 1000)}s - restarting it`);
+          this.lastHelperOutput = Date.now();
+          this.ocrProcess.kill();
+        }
+      }, 5000);
+    }
 
     isDev()
       ? console.log("Successfully initialized OCR process")
       : log.info("Successfully initialized OCR process");
-    return;
   }
 
   protected scanQueue: Promise<unknown> = Promise.resolve();
@@ -206,6 +272,7 @@ export default class OCRProcess {
 
   // Enable/disable the helper's Ctrl+wheel hook (swallows those events)
   setWheelHookEnabled(enabled: boolean): void {
+    this.wheelHookWanted = enabled;
     if (!this.ocrProcess || this.ocrProcess.killed) return;
     this.ocrProcess.stdin.write(
       enabled ? "WHEELHOOK ON\n" : "WHEELHOOK OFF\n"
@@ -227,7 +294,8 @@ export default class OCRProcess {
         }
         this.scanResolve = resolve;
         this.scanReject = reject;
-        this.scanBuffer = "";
+        this.scanBuffer = null;
+        this.scanCollecting = false;
         this.scanTimer = setTimeout(() => this.finishScan(null), 20 * 1000);
         const command = region
           ? `SCANREGION ${Math.round(region.x)} ${Math.round(region.y)} ${Math.round(region.width)} ${Math.round(region.height)}` +
@@ -249,6 +317,7 @@ export default class OCRProcess {
   protected finishScan(tsv: string | null): void {
     if (this.scanTimer) clearTimeout(this.scanTimer);
     this.scanTimer = null;
+    this.scanCollecting = false;
     const resolve = this.scanResolve;
     const reject = this.scanReject;
     this.scanResolve = null;
@@ -258,49 +327,66 @@ export default class OCRProcess {
     else reject?.(new Error("Screen scan timed out"));
   }
 
+  // The helper's stdout is line based but arrives in arbitrary chunks that
+  // can split or bundle lines, so buffer and handle one whole line at a time
   onNewData(data: any): void {
-    try {
-      // Wheel events can be interleaved with anything else; pull them out
-      if (this.scanBuffer === null && String(data).includes("WHEEL||")) {
-        const text = String(data);
-        const remaining: string[] = [];
-        for (const line of text.split(/\r?\n/)) {
-          const m = /^WHEEL\|\|(-?\d+)/.exec(line.trim());
-          if (m) this.onWheel?.(Number(m[1]));
-          else if (line.trim()) remaining.push(line);
-        }
-        if (remaining.length === 0) return;
-        data = remaining.join("\n");
-      }
+    this.lastHelperOutput = Date.now();
+    this.lineBuffer += String(data);
+    let eol = this.lineBuffer.indexOf("\n");
+    while (eol >= 0) {
+      const line = this.lineBuffer.slice(0, eol).replace(/\r$/, "");
+      this.lineBuffer = this.lineBuffer.slice(eol + 1);
+      this.onLine(line);
+      eol = this.lineBuffer.indexOf("\n");
+    }
+  }
 
-      // Route scan output (which can arrive in several chunks) to the
-      // pending request instead of the tooltip pipeline
-      if (this.scanBuffer !== null) {
-        this.scanBuffer += data.toString();
-        const end = this.scanBuffer.indexOf("SCANRESULT_END");
-        if (end < 0) return;
-        const begin = this.scanBuffer.indexOf("SCANRESULT_BEGIN");
-        const tsv =
-          begin >= 0 && begin < end
-            ? this.scanBuffer.slice(begin + "SCANRESULT_BEGIN".length, end)
-            : "";
-        const rest = this.scanBuffer
-          .slice(end + "SCANRESULT_END".length)
-          .trim();
-        this.finishScan(tsv);
-        if (rest) this.onNewData(rest);
+  private onLine(line: string): void {
+    try {
+      // Ctrl+wheel reports come first and always, whatever else the helper
+      // is in the middle of (a pending screen scan used to swallow them)
+      const wheel = /^WHEEL\|\|(-?\d+)\s*$/.exec(line);
+      if (wheel) {
+        this.onWheel?.(Number(wheel[1]));
         return;
       }
 
-      if (data.includes("IGNORE||NO CONFIG FILE FOUND")) {
+      // Heartbeat: proves the helper's main loop is alive (the timestamp is
+      // already recorded in onNewData)
+      if (line.startsWith("ALIVE||")) return;
+
+      // Screen scan output between the markers goes to the pending request
+      if (line === "SCANRESULT_BEGIN") {
+        this.scanCollecting = true;
+        this.scanCollectStart = Date.now();
+        this.scanBuffer = "";
+        return;
+      }
+      if (this.scanCollecting) {
+        if (line === "SCANRESULT_END") {
+          this.finishScan(this.scanBuffer ?? "");
+          return;
+        }
+        // A SCANRESULT_END that never arrives must not cost us the tooltip
+        // stream: give up on the block and treat this line normally
+        if (Date.now() - this.scanCollectStart > 25 * 1000) {
+          log.warn("Screen scan output never ended - dropping it");
+          this.finishScan(null);
+        } else {
+          this.scanBuffer = (this.scanBuffer ?? "") + line + "\n";
+          return;
+        }
+      }
+
+      const incomingData = line.trim();
+      if (!incomingData) return;
+      if (incomingData.includes("IGNORE||NO CONFIG FILE FOUND")) {
         this.priceListWindow.webContents.send(
           IpcConstants.ScreenConfigureNeeded
         );
         return;
       }
 
-      const text = new String(data);
-      const incomingData = text.toString().trim();
       if (incomingData === "MOUSEMOVE") {
         this.tooltipAnchor = null;
         if (this.tooltipWindow) {

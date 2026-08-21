@@ -304,31 +304,64 @@ static std::string scanForText(tesseract::TessBaseAPI& tess, int x1, int y1, int
 // quest panel uses it to scroll while the game owns the cursor.
 static std::atomic<bool> g_wheelHookEnabled{ false };
 static std::mutex g_stdoutMutex;
+// Ctrl+wheel delta the hook has taken but not reported yet
+static std::atomic<int> g_wheelPending{ 0 };
+static HANDLE g_wheelEvent = NULL;
+static HHOOK g_wheelHook = NULL;
 
 static LRESULT CALLBACK WheelHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
-	if (nCode >= 0 && wParam == WM_MOUSEWHEEL && g_wheelHookEnabled.load()
+	if (nCode >= 0 && wParam == WM_MOUSEWHEEL && g_wheelHookEnabled.load(std::memory_order_relaxed)
 		&& (GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
 		const MSLLHOOKSTRUCT* info = reinterpret_cast<const MSLLHOOKSTRUCT*>(lParam);
-		short delta = (short)HIWORD(info->mouseData);
-		{
-			std::lock_guard<std::mutex> lock(g_stdoutMutex);
-			cout << "WHEEL||" << delta << endl;
-			fflush(stdout);
-		}
+		// Never block in here: Windows silently drops a low-level hook that
+		// is ever slow to answer. Hand the delta to the reporter and return.
+		g_wheelPending.fetch_add((short)HIWORD(info->mouseData));
+		if (g_wheelEvent) SetEvent(g_wheelEvent);
 		return 1; // swallowed
 	}
 	return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
 
+// Writes the accumulated Ctrl+wheel delta to stdout, off the hook thread
+static void WheelReportThread() {
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+	while (true) {
+		WaitForSingleObject(g_wheelEvent, INFINITE);
+		int delta = g_wheelPending.exchange(0);
+		if (delta == 0) continue;
+		std::lock_guard<std::mutex> lock(g_stdoutMutex);
+		cout << "WHEEL||" << delta << endl;
+		fflush(stdout);
+	}
+}
+
+static void InstallWheelHook() {
+	if (g_wheelHook) UnhookWindowsHookEx(g_wheelHook);
+	g_wheelHook = SetWindowsHookExW(WH_MOUSE_LL, WheelHookProc, GetModuleHandleW(NULL), 0);
+}
+
 static void WheelHookThread() {
-	HHOOK hook = SetWindowsHookExW(WH_MOUSE_LL, WheelHookProc, GetModuleHandleW(NULL), 0);
-	if (!hook) return;
+	// Above the game's threads even though this process runs below normal,
+	// so the hook is always serviced inside Windows' low-level hook timeout
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+	g_wheelEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+	std::thread(WheelReportThread).detach();
+	InstallWheelHook();
+	if (!g_wheelHook) return;
+	// Windows removes a low-level hook it ever considered slow and never
+	// says so; re-installing every few seconds while enabled bounds any
+	// such outage to a few seconds instead of the rest of the session
+	SetTimer(NULL, 0, 4000, NULL);
 	MSG msg;
 	while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+		if (msg.message == WM_TIMER) {
+			if (g_wheelHookEnabled.load()) InstallWheelHook();
+			continue;
+		}
 		TranslateMessage(&msg);
 		DispatchMessageW(&msg);
 	}
-	UnhookWindowsHookEx(hook);
+	if (g_wheelHook) UnhookWindowsHookEx(g_wheelHook);
 }
 
 // Non-blocking check for a command line on stdin (the Electron main process
@@ -712,8 +745,20 @@ int main(int argc, char* argv[])
 
 	// Optimized polling loop (optimization #7)
 	int sleepInterval = 25; // Default sleep interval
-	
+	// Heartbeat: proves to the main process that this loop is still running,
+	// so a wedged helper can be restarted instead of silently doing nothing
+	auto lastHeartbeat = std::chrono::steady_clock::now();
+
 	while (true) {
+		{
+			auto now = std::chrono::steady_clock::now();
+			if (std::chrono::duration_cast<std::chrono::seconds>(now - lastHeartbeat).count() >= 5) {
+				lastHeartbeat = now;
+				std::lock_guard<std::mutex> lock(g_stdoutMutex);
+				cout << "ALIVE||" << (g_wheelHookEnabled.load() ? 1 : 0) << endl;
+				fflush(stdout);
+			}
+		}
 		// On-demand commands from the main process
 		std::string command;
 		if (readStdinLine(command)) {

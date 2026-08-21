@@ -37,6 +37,8 @@ declare global {
       setPanelOpacity: (opacity: number, commit?: boolean) => void;
       closePanel: () => void;
       toggleMap: () => void;
+      toggleScan: () => void;
+      requestScanStatus: () => void;
       // Exposed by the map window preload only (see ./map.ts)
       setMapInteractive: (enabled: boolean) => void;
       setMapBounds: (

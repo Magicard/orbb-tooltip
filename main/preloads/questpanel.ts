@@ -31,4 +31,10 @@ contextBridge.exposeInMainWorld("electron", {
   toggleMap: () => {
     ipcRenderer.send(IpcConstants.QuestPanelToggleMap);
   },
+  toggleScan: () => {
+    ipcRenderer.send(IpcConstants.QuestPanelToggleScan);
+  },
+  requestScanStatus: () => {
+    ipcRenderer.send(IpcConstants.QuestPanelScanStatusRequest);
+  },
 });

@@ -822,11 +822,9 @@ export default class TaskData {
       anywhere: [],
       perMap: [],
       operational: scan
-        ? [...scan.getTasks().values()]
-            .filter(
-              (t) =>
-                !t.taskId && t.percent < 100 && !/comple|done|fail/i.test(t.status)
-            )
+        ? scan
+            .getUnknownTasks()
+            .filter((t) => t.percent < 100 && !/comple|done|fail/i.test(t.status))
             .map((t) => ({ name: t.name, percent: t.percent, location: t.location }))
             .sort((a, b) => a.name.localeCompare(b.name))
         : [],
@@ -858,21 +856,23 @@ export default class TaskData {
         .filter(objectiveFilter)
         .map((o) => {
           const p = objectiveState(o.id);
-          // Prefer counts read off the Tasks screen when the tracker has none
-          const scannedCount = scan?.countFor(o.text);
-          const scannedDone = scan?.doneFor(task.id, o.text) === true;
+          // Progress read off the Tasks screen for this row; a "find" objective
+          // also counts what its "hand over" twin has already received
+          const state = scan?.stateFor(task.id, o.text);
+          const twin =
+            o.type === "findItem"
+              ? task.objectives.find((s) => s.type === "giveItem" && s.count === o.count)
+              : undefined;
+          const twinState = twin ? scan?.stateFor(task.id, twin.text) : undefined;
+          const scannedCount = state?.total ? state.count ?? 0 : scan?.countFor(o.text)?.count ?? 0;
+          const twinCount = twinState?.total ? twinState.count ?? 0 : 0;
+          const scannedDone = state?.done === true || twinState?.done === true;
           const trackerCount = Math.min(p?.count ?? 0, o.count);
-          const count =
-            scannedCount && trackerCount === 0
-              ? Math.min(scannedCount.count, o.count)
-              : trackerCount;
+          const count = Math.min(o.count, Math.max(trackerCount, scannedCount, twinCount));
           return {
             id: o.id,
             text: o.text,
-            done:
-              p?.complete === true ||
-              scannedDone ||
-              (scannedCount ? scannedCount.count >= o.count && o.count > 0 : false),
+            done: p?.complete === true || scannedDone || (o.count > 0 && count >= o.count),
             count,
             total: o.count,
             optional: o.optional,

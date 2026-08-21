@@ -49,6 +49,12 @@ export function QuestPanel() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
   const [opacity, setOpacity] = useState(0.95);
+  const [scanStatus, setScanStatus] = useState<{
+    active: boolean;
+    secondsLeft: number;
+    passes: number;
+    tasks: number;
+  } | null>(null);
   const boundsRef = useRef<Bounds | null>(null);
   const dragRef = useRef<Drag | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -70,6 +76,12 @@ export function QuestPanel() {
       (_event: unknown, next: Bounds) => {
         boundsRef.current = next;
       }
+    );
+    window.electron.requestScanStatus();
+    window.electron.receive(
+      IpcConstants.QuestPanelScanStatus,
+      (_event: unknown, status: { active: boolean; secondsLeft: number; passes: number; tasks: number }) =>
+        setScanStatus(status)
     );
     window.electron
       .getUserConfig()
@@ -210,6 +222,44 @@ export function QuestPanel() {
         onKeyUp={() => window.electron.setPanelOpacity(opacity, true)}
         className="orbb-slider absolute top-[8px] right-2.5 w-12 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
       />
+
+      {/* SCANNER STATE (always visible; click to start / stop) */}
+      <div className="shrink-0 px-1.5 pb-1">
+        <button
+          className={`w-full flex items-center gap-1.5 px-1.5 py-0.5 rounded border text-[10px] uppercase tracking-wider ${
+            scanStatus?.active
+              ? "border-amber-500/60 bg-amber-500/10 text-amber-400"
+              : "border-stone-700 bg-stone-800/50 text-stone-500 hover:text-stone-300 hover:border-stone-600"
+          }`}
+          title={
+            scanStatus?.active
+              ? "Reading the game's Tasks screen - click to stop"
+              : "Read your progress off the game's Tasks screen"
+          }
+          onClick={() => window.electron.toggleScan()}
+        >
+          <span
+            className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
+              scanStatus?.active ? "bg-amber-400 animate-pulse" : "bg-stone-600"
+            }`}
+          />
+          {scanStatus?.active ? (
+            <>
+              <span>Scanning</span>
+              <span className="ml-auto tabular-nums normal-case tracking-normal">
+                {scanStatus.secondsLeft}s · {scanStatus.tasks} tasks
+              </span>
+            </>
+          ) : (
+            <>
+              <span>Scanner off</span>
+              <span className="ml-auto normal-case tracking-normal text-stone-600">
+                open Tasks, click here
+              </span>
+            </>
+          )}
+        </button>
+      </div>
 
       {scavWarning && (
         <div className="shrink-0 px-3 pb-1 text-[11px] text-amber-400" style={{ opacity }}>
@@ -361,12 +411,18 @@ export function QuestPanel() {
           </div>
         )}
 
-        {data && (
-          <div className="text-[11px] text-stone-500 px-1 pt-1">
-            {data.scanned
-              ? `Tasks screen scanned ${timeAgo(data.scanned.at)} (${data.scanned.count} tasks). `
-              : "Open the game's Tasks screen and press ], then scroll and click through your tasks for ~45s. "}
+        {scanStatus?.active ? (
+          <div className="text-[11px] text-amber-400 px-1 pt-1">
+            Scroll and click through your tasks - what is on screen is what gets read.
           </div>
+        ) : (
+          data && (
+            <div className="text-[11px] text-stone-500 px-1 pt-1">
+              {data.scanned
+                ? `Tasks screen scanned ${timeAgo(data.scanned.at)} (${data.scanned.count} tasks). `
+                : "Open the game's Tasks screen and press ], then scroll and click through your tasks for ~45s. "}
+            </div>
+          )
         )}
       </div>
 

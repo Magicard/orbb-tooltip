@@ -1,5 +1,12 @@
 import { BrowserWindow, screen } from "electron";
 import IpcConstants from "./IpcConstants";
+
+export type QuestScanStatus = {
+  active: boolean;
+  secondsLeft: number;
+  passes: number;
+  tasks: number;
+};
 import { QuestPanelData } from "./TaskData";
 
 declare const QUEST_PANEL_WINDOW_WEBPACK_ENTRY: string;
@@ -187,6 +194,13 @@ export default class QuestPanelWindow extends BrowserWindow {
     // Ctrl+wheel scrolling is provided by the OCR helper's hook; the main
     // process enables it while the panel is visible (see index.ts)
     this.onVisibilityChange?.(true);
+  }
+
+  // Progress of a Tasks-screen scan session (shown in the panel footer)
+  sendScanStatus(status: QuestScanStatus): void {
+    if (!this.isDestroyed()) {
+      this.webContents.send(IpcConstants.QuestPanelScanStatus, status);
+    }
   }
 
   scrollBy(delta: number): void {

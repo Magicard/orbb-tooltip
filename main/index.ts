@@ -502,23 +502,61 @@ try {
     // open, keep reading it every couple of seconds as the player scrolls
     // and clicks through their list (no input is ever sent to the game)
     const SCAN_SESSION_MS = 45 * 1000;
+    let scanSessionPasses = 0;
     const SCAN_SESSION_INTERVAL_MS = 2000;
+    // The scan hotkey / panel chip toggles the session
+    function toggleScanSession() {
+      if (scanSessionTimer) stopScanSession();
+      else startScanSession();
+    }
+
+    function stopScanSession() {
+      if (scanSessionTimer) clearTimeout(scanSessionTimer);
+      scanSessionTimer = null;
+      scanSessionUntil = 0;
+      log.info("Tasks screen scan session stopped");
+      sendScanStatus(false);
+      pushQuestPanelData();
+    }
+
+    function sendScanStatus(active: boolean) {
+      questPanel?.sendScanStatus({
+        active,
+        secondsLeft: active
+          ? Math.max(0, Math.round((scanSessionUntil - Date.now()) / 1000))
+          : 0,
+        passes: scanSessionPasses,
+        tasks: taskScan ? taskScan.getLastScan().count : 0,
+      });
+    }
+
     function startScanSession() {
       scanSessionUntil = Date.now() + SCAN_SESSION_MS;
       scanSessionEmptyRuns = 0;
-      if (scanSessionTimer) return; // already running - just extended
+      // The panel is where the session's progress shows, so make sure it
+      // is on screen: the key press is acknowledged the moment it happens
+      if (questPanel && !questPanel.isPanelVisible()) questPanel.showPanel();
+      if (scanSessionTimer) {
+        sendScanStatus(true);
+        return; // already running - just extended
+      }
+      scanSessionPasses = 0;
       log.info("Tasks screen scan session started");
+      sendScanStatus(true);
       const tick = async () => {
         const found = await scanTasksScreenOnce();
+        scanSessionPasses++;
         scanSessionEmptyRuns = found > 0 ? 0 : scanSessionEmptyRuns + 1;
         const done =
           Date.now() >= scanSessionUntil || scanSessionEmptyRuns >= 4;
         if (done) {
           scanSessionTimer = null;
           log.info("Tasks screen scan session ended");
+          sendScanStatus(false);
           pushQuestPanelData();
           return;
         }
+        sendScanStatus(true);
         scanSessionTimer = setTimeout(tick, SCAN_SESSION_INTERVAL_MS);
       };
       scanSessionTimer = setTimeout(tick, 0);
@@ -622,15 +660,9 @@ try {
         globalShortcut.unregister(questScanHotkey);
         questScanHotkey = null;
       }
-      if (mapHotkey) {
-        globalShortcut.unregister(mapHotkey);
-        mapHotkey = null;
-      }
-      if (mapWindow && !mapWindow.isDestroyed()) mapWindow.destroyMap();
-      mapWindow = null;
       const wanted = accelerator?.trim() || DEFAULT_QUEST_SCAN_HOTKEY;
       try {
-        if (globalShortcut.register(wanted, () => startScanSession())) {
+        if (globalShortcut.register(wanted, () => toggleScanSession())) {
           questScanHotkey = wanted;
         } else {
           log.warn(`Task scan hotkey "${wanted}" could not be registered`);
@@ -691,6 +723,12 @@ try {
         globalShortcut.unregister(questScanHotkey);
         questScanHotkey = null;
       }
+      if (mapHotkey) {
+        globalShortcut.unregister(mapHotkey);
+        mapHotkey = null;
+      }
+      if (mapWindow && !mapWindow.isDestroyed()) mapWindow.destroyMap();
+      mapWindow = null;
       if (questPanel && !questPanel.isDestroyed()) questPanel.destroyPanel();
       questPanel = null;
     }
@@ -927,6 +965,10 @@ try {
     );
 
     // Quest panel buttons
+    ipcMain.on(IpcConstants.QuestPanelToggleScan, () => toggleScanSession());
+    ipcMain.on(IpcConstants.QuestPanelScanStatusRequest, () =>
+      sendScanStatus(!!scanSessionTimer)
+    );
     ipcMain.on(IpcConstants.QuestPanelClose, () => questPanel?.hidePanel());
     ipcMain.on(IpcConstants.QuestPanelToggleMap, () => {
       mapWindow?.toggle();
@@ -1426,6 +1468,10 @@ try {
     //     }, 1000);
     //   });
     // });
+  });
+
+  app.on("before-quit", () => {
+    ocr?.shutdown();
   });
 
   app.on("window-all-closed", () => {
