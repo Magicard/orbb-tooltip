@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import IpcConstants from "../../models/IpcConstants";
+import { DragContext, useQuestOrder } from "../hooks/useQuestOrder";
 import type {
   QuestPanelData,
   QuestPanelQuest,
@@ -34,6 +35,24 @@ type Drag = {
 };
 
 const COLLAPSED_KEY = "orbb.questPanel.collapsed";
+const SHOW_DONE_KEY = "orbb.questPanel.showDone";
+type SectionKey = "map" | "anywhere" | "operational";
+// Where a change came from, at a glance
+const CHANGE_MARKS = { scan: "\u25ce", game: "\u25cf", raid: "\u25b8", tracker: "\u21ba" } as const;
+const CHANGE_COLOURS = {
+  scan: "text-amber-500",
+  game: "text-green-500",
+  raid: "text-sky-400",
+  tracker: "text-stone-500",
+} as const;
+const CHANGE_SOURCES = {
+  scan: "Read off the Tasks screen",
+  game: "From the game's own log",
+  raid: "From an in-raid notification",
+  tracker: "From TarkovTracker",
+} as const;
+// Whether finished objectives are listed (dimmed) or hidden
+const ShowDoneContext = createContext(false);
 
 function loadCollapsed(): Set<string> {
   try {
@@ -48,12 +67,41 @@ export function QuestPanel() {
   const [visible, setVisible] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
+  const [showDone, setShowDone] = useState<boolean>(() => localStorage.getItem(SHOW_DONE_KEY) === "1");
+  const [changesOpen, setChangesOpen] = useState(false);
+  // Which section the list is showing at its top, so the one sticky bar can
+  // name it - the map picker while you are in the map's quests, then
+  // ANYWHERE, then OPERATIONAL. The done toggle rides along on its right.
+  const [section, setSection] = useState<SectionKey>("map");
+  const onListScroll = () => {
+    const list = listRef.current;
+    if (!list) return;
+    const underBar = list.getBoundingClientRect().top + 26;
+    let current: SectionKey = "map";
+    for (const marker of list.querySelectorAll<HTMLElement>("[data-section]")) {
+      if (marker.getBoundingClientRect().top <= underBar) {
+        current = (marker.dataset.section as SectionKey) ?? current;
+      }
+    }
+    setSection(current);
+  };
+  // Drag-to-reorder plus the saved order applied to a list
+  const { applyOrder, dragApi } = useQuestOrder();
+  const toggleShowDone = () => {
+    setShowDone((previous) => {
+      localStorage.setItem(SHOW_DONE_KEY, previous ? "0" : "1");
+      return !previous;
+    });
+  };
   const [opacity, setOpacity] = useState(0.95);
   const [scanStatus, setScanStatus] = useState<{
     active: boolean;
     secondsLeft: number;
     passes: number;
     tasks: number;
+    updates: number;
+    newTasks: number;
+    endedAt: number | null;
   } | null>(null);
   const boundsRef = useRef<Bounds | null>(null);
   const dragRef = useRef<Drag | null>(null);
@@ -80,8 +128,18 @@ export function QuestPanel() {
     window.electron.requestScanStatus();
     window.electron.receive(
       IpcConstants.QuestPanelScanStatus,
-      (_event: unknown, status: { active: boolean; secondsLeft: number; passes: number; tasks: number }) =>
-        setScanStatus(status)
+      (
+        _event: unknown,
+        status: {
+          active: boolean;
+          secondsLeft: number;
+          passes: number;
+          tasks: number;
+          updates: number;
+          newTasks: number;
+          endedAt: number | null;
+        }
+      ) => setScanStatus(status)
     );
     window.electron
       .getUserConfig()
@@ -103,13 +161,21 @@ export function QuestPanel() {
     const step = () => {
       const list = listRef.current;
       if (!list || target === null) return;
+      // The list can shrink mid-animation: keep the target reachable
+      target = Math.max(0, Math.min(list.scrollHeight - list.clientHeight, target));
       const remaining = target - list.scrollTop;
       if (Math.abs(remaining) < 1) {
         list.scrollTop = target;
         target = null;
         return;
       }
+      const before = list.scrollTop;
       list.scrollTop += remaining * 0.45;
+      if (list.scrollTop === before) {
+        // Pinned by the browser: nothing more to do
+        target = null;
+        return;
+      }
       raf = requestAnimationFrame(step);
     };
     window.electron.receive(
@@ -188,15 +254,13 @@ export function QuestPanel() {
     : "Pick a map";
 
   return (
+    <ShowDoneContext.Provider value={showDone}>
+    <DragContext.Provider value={dragApi}>
     <div
       className={`group relative h-full w-full flex flex-col rounded-l-lg border border-stone-700 text-stone-200 font-['Bender'] tracking-wide transition-transform duration-[260ms] ease-out overflow-hidden ${
         visible ? "translate-x-0" : "translate-x-full"
       }`}
       style={{ backgroundColor: `rgba(28, 25, 23, ${opacity})` }}
-      onMouseEnter={() => window.electron.setPanelInteractive(true)}
-      onMouseLeave={() => {
-        if (!dragRef.current) window.electron.setPanelInteractive(false);
-      }}
     >
       {/* DRAG HANDLE */}
       <div
@@ -272,7 +336,23 @@ export function QuestPanel() {
             <>
               <span>Scanning</span>
               <span className="ml-auto tabular-nums normal-case tracking-normal">
-                {scanStatus.secondsLeft}s · {scanStatus.tasks} tasks
+                {scanStatus.tasks} tasks
+                {scanStatus.newTasks > 0 && ` · ${scanStatus.newTasks} new`}
+                {` · ${plural(scanStatus.updates, "update")} · ${scanStatus.secondsLeft}s`}
+              </span>
+            </>
+          ) : scanStatus?.endedAt ? (
+            <>
+              <span>Scanner off</span>
+              <span
+                className={`ml-auto tabular-nums normal-case tracking-normal ${
+                  scanStatus.updates > 0 ? "text-green-400" : "text-stone-500"
+                }`}
+                title="What the last scan changed"
+              >
+                last scan: {scanStatus.tasks} tasks
+                {scanStatus.newTasks > 0 && `, ${scanStatus.newTasks} new`}
+                {`, ${plural(scanStatus.updates, "update")}`}
               </span>
             </>
           ) : (
@@ -295,9 +375,43 @@ export function QuestPanel() {
       {/* LIST (dims with the slider along with the background) */}
       <div
         ref={listRef}
+        onScroll={onListScroll}
         className="flex-1 min-h-0 overflow-y-auto px-3 pb-2 space-y-3 [scrollbar-width:thin] [scrollbar-color:#57534e_transparent]"
         style={{ opacity }}
       >
+        {data?.hasProgress && (
+          <div className="sticky top-0 z-20 -mx-3 px-3 pt-1 pb-1 bg-[#1c1917] flex items-baseline gap-1.5">
+            {section === "map" ? (
+              <button
+                className="text-[11px] uppercase tracking-widest text-stone-400 hover:text-white font-bold flex items-center gap-1.5"
+                onClick={() => setPickerOpen((open) => !open)}
+                title="Choose a map"
+              >
+                <span>{mapLabel}</span>
+                {data.here.length > 0 && <span className="text-stone-600">{data.here.length}</span>}
+                <span className="text-stone-500 text-[9px]">{pickerOpen ? "▲" : "▼"}</span>
+              </button>
+            ) : (
+              <span className="text-[11px] uppercase tracking-widest text-stone-500 font-bold">
+                {section === "anywhere" ? "Anywhere" : "Operational"}
+                <span className="ml-1.5 text-stone-600">
+                  {section === "anywhere" ? data.anywhere.length : data.operational.length}
+                </span>
+              </span>
+            )}
+            <button
+              className={`ml-auto text-[11px] uppercase tracking-widest font-bold flex items-center gap-1 shrink-0 ${
+                showDone ? "text-green-400 hover:text-green-300" : "text-stone-500 hover:text-stone-300"
+              }`}
+              onClick={toggleShowDone}
+              title={showDone ? "Hide finished objectives" : "Show finished objectives"}
+            >
+              <span className="font-mono text-[11px]">✓</span>
+              done
+            </button>
+          </div>
+        )}
+
         {!data && <Hint>Loading quests...</Hint>}
 
         {data && !data.hasProgress && (
@@ -309,22 +423,7 @@ export function QuestPanel() {
         )}
 
         {data && data.hasProgress && (
-          <div>
-            {/* MAP PICKER (stays put while the list scrolls) */}
-            <div className="sticky top-0 z-10 -mx-3 px-3 bg-[#1c1917] pb-0.5">
-            <button
-              className="text-[11px] uppercase tracking-widest text-stone-400 hover:text-white font-bold mb-1 pt-1 flex items-center gap-1.5"
-              onClick={() => setPickerOpen((open) => !open)}
-              title="Choose a map"
-            >
-              <span>{mapLabel}</span>
-              {data.here.length > 0 && (
-                <span className="text-stone-600">{data.here.length}</span>
-              )}
-              <span className="text-stone-500 text-[9px]">
-                {pickerOpen ? "▲" : "▼"}
-              </span>
-            </button>
+          <div data-section="map">
 
             {pickerOpen && (
               <div className="mb-2 rounded bg-stone-800 border border-stone-700 p-1 grid grid-cols-2 gap-0.5 text-sm">
@@ -357,11 +456,10 @@ export function QuestPanel() {
                 ))}
               </div>
             )}
-            </div>
 
             {data.mapName ? (
               <QuestList
-                quests={data.here}
+                quests={applyOrder(data.here)}
                 emptyText="Nothing to do here - enjoy the raid"
                 collapsed={collapsed}
                 onToggle={toggleCollapsed}
@@ -393,15 +491,13 @@ export function QuestPanel() {
         )}
 
         {data && data.hasProgress && data.anywhere.length > 0 && (
-          <div>
+          <div data-section="anywhere">
             <SectionTitle>
               Anywhere
-              <span className="ml-1.5 text-stone-600">
-                {data.anywhere.length}
-              </span>
+              <span className="ml-1.5 text-stone-600">{data.anywhere.length}</span>
             </SectionTitle>
             <QuestList
-              quests={data.anywhere}
+              quests={applyOrder(data.anywhere)}
               emptyText=""
               collapsed={collapsed}
               onToggle={toggleCollapsed}
@@ -410,12 +506,10 @@ export function QuestPanel() {
         )}
 
         {data && data.operational.length > 0 && (
-          <div>
+          <div data-section="operational">
             <SectionTitle>
               Operational
-              <span className="ml-1.5 text-stone-600">
-                {data.operational.length}
-              </span>
+              <span className="ml-1.5 text-stone-600">{data.operational.length}</span>
             </SectionTitle>
             <div className="space-y-1.5">
               {data.operational.map((t) => (
@@ -441,7 +535,7 @@ export function QuestPanel() {
                   <span className="ml-auto text-[11px] text-stone-500 shrink-0">
                     {t.location}
                   </span>
-                  {t.percent !== null && (
+                  {t.percent !== undefined && (
                     <span className="text-xs text-stone-300 tabular-nums shrink-0">
                       {t.percent}%
                     </span>
@@ -465,6 +559,29 @@ export function QuestPanel() {
             </div>
           )
         )}
+
+        {/* WHAT CHANGED - from scans, the game's log and in-raid toasts */}
+        {data && data.changes.length > 0 && (
+          <div className="px-1 pb-1 space-y-0.5">
+            {(changesOpen ? data.changes : data.changes.slice(0, 3)).map((c) => (
+              <div key={`${c.at}-${c.text}`} className="text-[11px] leading-snug flex gap-1.5">
+                <span className={`shrink-0 ${CHANGE_COLOURS[c.source]}`} title={CHANGE_SOURCES[c.source]}>
+                  {CHANGE_MARKS[c.source]}
+                </span>
+                <span className="text-stone-400 min-w-0">{c.text}</span>
+                <span className="ml-auto shrink-0 text-stone-600 tabular-nums">{timeAgo(c.at)}</span>
+              </div>
+            ))}
+            {data.changes.length > 3 && (
+              <button
+                className="text-[10px] uppercase tracking-widest text-stone-600 hover:text-stone-400"
+                onClick={() => setChangesOpen((open) => !open)}
+              >
+                {changesOpen ? "show less" : `show all ${data.changes.length}`}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* RESIZE GRIP (bottom-left corner: width + height) */}
@@ -486,7 +603,13 @@ export function QuestPanel() {
         </svg>
       </div>
     </div>
+    </DragContext.Provider>
+    </ShowDoneContext.Provider>
   );
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
 function timeAgo(at: number): string {
@@ -546,10 +669,26 @@ function Quest({
   collapsed: boolean;
   onToggle: () => void;
 }) {
-  const remaining = quest.objectives.filter((o) => !o.done).length;
+  // Finished objectives are hidden unless the "done" toggle is on - and
+  // with it on, the whole quest is listed (every map, hand-ins included)
+  const showDone = useContext(ShowDoneContext);
+  const visibleObjectives = showDone ? quest.allObjectives : quest.objectives.filter((o) => !o.done);
+  // Every subtask done but not handed in yet (the logs would have removed
+  // it otherwise): a green title and a DONE badge. Its objectives are all
+  // finished, so they show only with the "done" toggle on - which is the
+  // moment you want to see what led us to believe it.
+  const finished = !!(quest.ready || quest.allDone);
+  const drag = useContext(DragContext);
   return (
     <div
-      className="rounded bg-stone-800/70 px-2.5 py-1.5"
+      data-quest-id={quest.id}
+      // Click collapses, press and move reorders (see useQuestOrder)
+      {...drag?.cardProps(quest.id)}
+      className={`group/quest relative rounded bg-stone-800/70 px-2.5 py-1.5 select-none ${
+        drag?.draggingId === quest.id
+          ? "opacity-60 ring-1 ring-stone-500 cursor-grabbing"
+          : "active:cursor-grabbing"
+      }`}
       onMouseDown={(e) => {
         if (e.button === 1) e.preventDefault(); // no autoscroll cursor
       }}
@@ -563,9 +702,9 @@ function Quest({
       <button
         className="w-full flex items-baseline gap-2 whitespace-nowrap overflow-hidden text-left"
         onClick={onToggle}
-        title={(collapsed ? "Click to expand" : "Click to collapse") + " - middle-click for the wiki"}
+        title={quest.name}
       >
-        <span className="text-[15px] font-black text-white truncate">
+        <span className={`text-[15px] font-black truncate ${finished ? "text-green-400" : "text-white"}`}>
           {quest.name}
         </span>
         {quest.kappa && (
@@ -577,13 +716,13 @@ function Quest({
           </span>
         )}
         <span className="ml-auto text-[11px] text-stone-500 shrink-0">
-          {collapsed && remaining > 0 && (
-            <span className="text-stone-400 mr-1.5">{remaining} to do</span>
+          {finished && (
+            <span className="text-green-400 font-bold mr-1.5" title="Every objective is done - hand it in">DONE</span>
           )}
-          {quest.ready && (
-            <span className="text-green-400 font-bold mr-1.5">READY</span>
+          {!finished && quest.doneHere && (
+            <span className="text-green-500/80 font-bold mr-1.5" title="Nothing left to do on this list">DONE HERE</span>
           )}
-          {!quest.ready && quest.subtasksDone && (
+          {!finished && quest.subtasksDone && (
             <span className="text-green-400 mr-1.5" title="Subtask completed this raid">
               ✓{quest.subtasksDone}
             </span>
@@ -596,9 +735,9 @@ function Quest({
           {quest.trader}
         </span>
       </button>
-      {!collapsed && (
+      {!collapsed && visibleObjectives.length > 0 && (
         <div className="mt-0.5 space-y-0.5">
-          {quest.objectives.map((o) => (
+          {visibleObjectives.map((o) => (
             <Objective key={o.id} objective={o} />
           ))}
         </div>
@@ -608,8 +747,9 @@ function Quest({
 }
 
 function Objective({ objective: o }: { objective: QuestPanelObjective }) {
-  // White = still to do, green = done
-  const color = o.done ? "text-green-500" : "text-stone-200";
+  // White = still to do; finished ones (only listed with the "done" toggle
+  // on) sit back in a darker grey
+  const color = o.done ? "text-stone-500" : "text-stone-200";
   return (
     <div className={`flex items-start gap-1.5 text-[13px] leading-snug ${color}`}>
       <span className="mt-[3px] shrink-0 font-mono text-[11px]">

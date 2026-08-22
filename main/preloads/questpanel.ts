@@ -10,9 +10,6 @@ contextBridge.exposeInMainWorld("electron", {
   getUserConfig: () => {
     return ipcRenderer.invoke(IpcConstants.GetUserConfig);
   },
-  setPanelInteractive: (enabled: boolean) => {
-    ipcRenderer.send(IpcConstants.QuestPanelInteractive, enabled);
-  },
   setPanelBounds: (
     patch: { y?: number; height?: number; width?: number },
     commit: boolean

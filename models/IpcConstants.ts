@@ -34,7 +34,6 @@ export default class IpcConstants {
   static TooltipSize = "tooltip-size";
   static QuestPanelData = "quest-panel-data";
   static QuestPanelVisibility = "quest-panel-visibility";
-  static QuestPanelInteractive = "quest-panel-interactive";
   static QuestPanelBounds = "quest-panel-bounds";
   static QuestPanelSetBounds = "quest-panel-set-bounds";
   static QuestPanelSelectMap = "quest-panel-select-map";
@@ -52,7 +51,6 @@ export default class IpcConstants {
   static MapWindowVisibility = "map-window-visibility";
   static MapWindowBounds = "map-window-bounds";
   static MapWindowSetBounds = "map-window-set-bounds";
-  static MapWindowInteractive = "map-window-interactive";
   static MapWindowClose = "map-window-close";
   static MapWindowOpacity = "map-window-opacity";
 }

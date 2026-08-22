@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { TOOLTIP_ITEM } from "../state/tooltipItem";
 import { useHookstate } from "@hookstate/core";
-import { numberWithCommas } from "../../utils";
+import { fleaPrice, numberWithCommas } from "../../utils";
 import { ItemTask } from "../../models/Item";
 
 // Quest/hideout requirements arrive on the item itself (Item.tasks),
@@ -59,10 +59,7 @@ export function Tooltip() {
   }, [item]);
 
   if (item) {
-    const fleaPriceToUse =
-      item.prices.avgDay > item.prices.latest
-        ? item.prices.latest
-        : item.prices.avgDay;
+    const fleaPriceToUse = fleaPrice(item);
     const traderPrice = item?.prices?.trader?.price > 0 ? item.prices.trader.price : 0;
     // Per-slot value only matters for items bigger than one cell
     const perSlot = showPerSlotPrice && item.slots > 1;

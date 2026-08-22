@@ -1,11 +1,18 @@
 import { BrowserWindow, screen } from "electron";
 import IpcConstants from "./IpcConstants";
+import ClickThrough from "./ClickThrough";
 
 export type QuestScanStatus = {
   active: boolean;
   secondsLeft: number;
   passes: number;
   tasks: number;
+  // Changes this session made to what we know (new / changed task rows,
+  // counters, ticks), and when the last session ended
+  updates: number;
+  // Tasks this session saw for the first time (part of `updates`)
+  newTasks: number;
+  endedAt: number | null;
 };
 import { QuestPanelData } from "./TaskData";
 
@@ -41,7 +48,7 @@ export default class QuestPanelWindow extends BrowserWindow {
   private panelHeight: number;
   private panelWidth: number;
   // Called with true/false when the panel becomes visible/hidden
-  private interactive: boolean;
+  private clickThrough: ClickThrough;
   public onVisibilityChange: ((visible: boolean) => void) | null;
 
   constructor(saved?: Partial<QuestPanelBounds>) {
@@ -82,7 +89,7 @@ export default class QuestPanelWindow extends BrowserWindow {
     });
 
     this.panelVisible = false;
-    this.interactive = false;
+    this.clickThrough = new ClickThrough(this, () => this.panelVisible);
     this.hideTimer = null;
     this.lastData = null;
     this.panelY = y;
@@ -90,9 +97,8 @@ export default class QuestPanelWindow extends BrowserWindow {
     this.panelWidth = width;
     this.onVisibilityChange = null;
 
-    // Click-through, but forward mouse moves so the page can tell when the
-    // cursor is over it and ask to become interactive (see setInteractive)
-    this.setIgnoreMouseEvents(true, { forward: true });
+    // Click-through until the cursor poll says otherwise (see ClickThrough)
+    this.setIgnoreMouseEvents(true);
     this.setAlwaysOnTop(true, "screen-saver");
     this.loadURL(QUEST_PANEL_WINDOW_WEBPACK_ENTRY);
   }
@@ -109,25 +115,12 @@ export default class QuestPanelWindow extends BrowserWindow {
     return { y: this.panelY, height: this.panelHeight, width: this.panelWidth };
   }
 
-  // While the cursor hovers the panel it takes mouse input so the wheel
-  // scrolls the list and the handles work; otherwise everything passes
-  // through to the game
   setInteractive(enabled: boolean): void {
-    if (this.isDestroyed()) return;
-    this.interactive = enabled && this.panelVisible;
-    this.setIgnoreMouseEvents(!this.interactive, { forward: true });
+    this.clickThrough.set(enabled);
   }
 
-  // Click-through windows learn the cursor is over them from mouse moves
-  // Electron forwards via a low-level hook - which Windows silently drops
-  // if the app is ever slow. Dropping and re-arming forwarding reinstalls
-  // it; index.ts does this for every overlay window every few seconds.
-  // "drop" then "arm" must run on all windows in that order, because the
-  // hook is shared and only reinstalled once no window is forwarding.
-  forwardingCycle(phase: "drop" | "arm"): void {
-    if (this.isDestroyed() || !this.panelVisible || this.interactive) return;
-    if (phase === "drop") this.setIgnoreMouseEvents(true);
-    else this.setIgnoreMouseEvents(true, { forward: true });
+  isInteractive(): boolean {
+    return this.clickThrough.get();
   }
 
   // Move (y) and/or resize (width/height), clamped to the primary work area;
@@ -225,8 +218,7 @@ export default class QuestPanelWindow extends BrowserWindow {
     if (this.isDestroyed()) return;
     this.panelVisible = false;
     this.onVisibilityChange?.(false);
-    this.interactive = false;
-    this.setIgnoreMouseEvents(true, { forward: true });
+    this.clickThrough.reset();
     this.webContents.send(IpcConstants.QuestPanelVisibility, false);
     // Let the slide-out animation play, then drop the window entirely
     this.hideTimer = setTimeout(() => {

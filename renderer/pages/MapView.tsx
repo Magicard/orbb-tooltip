@@ -112,10 +112,6 @@ export function MapView() {
     <div
       className="relative h-full w-full flex flex-col rounded-lg border border-stone-700 bg-stone-900 text-stone-200 font-['Bender'] tracking-wide overflow-hidden transition-opacity duration-150"
       style={{ opacity: visible ? opacity : 0 }}
-      onMouseEnter={() => window.electron.setMapInteractive(true)}
-      onMouseLeave={() => {
-        if (!dragRef.current) window.electron.setMapInteractive(false);
-      }}
     >
       {/* TITLE BAR (drag to move) */}
       <div

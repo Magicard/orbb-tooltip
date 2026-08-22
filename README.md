@@ -22,7 +22,13 @@
 - **Quests and hideout upgrades that need it**, with counts
 - **Your progress** *(optional)* — link TarkovTracker and requirements you can do **right now show green**, ones locked behind later quests are dimmed "(later)", and ones you've already finished disappear
 
-**Quest panel.** Press **`'`** and a Questie-style panel slides in from the right: the quests you've accepted with objectives on the map you're on, the ones you can do anywhere, and your rotating Operational tasks. White = to do, green = done, with counters ("3/5"), percent, a **READY** badge when a quest is ready to hand in, and a **K** for Kappa. Click a quest to collapse it, **middle-click** one to open its wiki page, click the map name to browse any map, drag the grip to move it, drag the bottom-left corner to resize it, slide the opacity control to taste. **Ctrl + wheel scrolls it from anywhere**, even mid-raid while the game owns your cursor; in menus just hover it and scroll normally.
+**Quest panel.** Press **`'`** and a Questie-style panel slides in from the right: the quests you've accepted with objectives on the map you're on, the ones you can do anywhere, and your rotating Operational tasks. Objectives still to do are listed white with their counters ("3/5"); a quest whose work is all done but that you haven't handed in yet collapses to a green title with a **DONE** badge, and **READY** appears when the game itself says so.
+
+- **Click** a quest to collapse it, **middle-click** it to open its wiki page, **drag the grip** on its left edge to reorder the list — your order and which quests are collapsed are remembered between sessions.
+- **✓ DONE** in the section header shows the finished objectives too, dimmed, so you can see what you've already knocked out. Each section header (the map name, ANYWHERE, OPERATIONAL) sticks to the top as you scroll and carries its own toggle.
+- Click the map name to browse any map's quests, drag the top grip to move the panel, the bottom-left corner to resize it, and the slider (top-right) to set opacity.
+- **Ctrl + wheel scrolls it from anywhere**, even mid-raid while the game owns your cursor; in menus just hover it and scroll normally.
+- Under the list, **what changed lately** — each line marked by where it came from: ◎ read off the Tasks screen, ● from the game's log, ▸ from an in-raid notification, ↺ from TarkovTracker.
 
 <div align="center"><img src="docs/images/quest-panel.png" alt="Quest panel on Customs listing active quests with objectives on this map" width="360"></div>
 
@@ -34,11 +40,13 @@
 2. **The Tasks screen scanner.** Press **`]`** (or click **SCANNER** at the top of the panel) on the game's Tasks screen or a trader's task list and the overlay reads it: which tasks are active, their percent, and — for the task you have open — each objective's counter and whether it carries the game's ✓. Scroll and click through your tasks; it keeps reading until you turn it off or leave the screen.
 3. **In-raid notifications.** The "Subtask completed" / "Task … is ready to be completed" toasts in the bottom-right corner are read as they appear.
 
-Everything learned is kept locally and, if you link TarkovTracker, **pushed to your tracker** too, so it stays the one source of truth across devices.
+4. **TarkovTracker itself.** Out of raid it's polled every few minutes and whenever you open the panel, so anything TarkovMonitor (or you, on another device) marked there shows up here.
+
+Everything learned is kept locally and, if you link TarkovTracker, **pushed to your tracker** too, so it stays the one source of truth across devices. Nothing is ever marked *un*-done from a misread.
 
 **Search log.** The main window lists everything you've hovered, newest first, with its market and trader value and a running **market total** and **trader total** — handy for deciding what's worth dragging out of a raid.
 
-Prices come from [tarkov.dev](https://tarkov.dev) (community data, refreshed every 15 minutes) for **regular PvP, the seasonal PvP wipe, or PvE** — your pick. It only ever *reads pixels from your screen and your own log files*; it never touches the game, sends it input, or modifies anything.
+Prices come from [tarkov.dev](https://tarkov.dev) (community data, refreshed every 15 minutes) for **regular PvP, the seasonal PvP wipe, or PvE** — your pick. The flea number is the **24-hour average**, so on a volatile item it will sit below the cheapest offer on screen when the market is running hot and above it when it's cold — that's the average doing its job, not a stale read. It only ever *reads pixels from your screen and your own log files*; it never touches the game, sends it input, or modifies anything.
 
 > ORBB ToolTip is a fork of [sammereye/flea-tooltip](https://github.com/sammereye/flea-tooltip) (FleaTooltip), revived after its price source went offline in July 2026 and extended from there. As with any overlay, use it at your own discretion regarding BSG's terms of service.
 
@@ -103,6 +111,8 @@ Without a TarkovTracker token the app already knows what you've accepted and han
 
 ### Exact progress: scan the Tasks screen
 
+Leave the quest panel open while you scan — it's a thin strip at the right edge, clear of the task list, and it shows the progress. The map window is put away automatically for the duration and comes back after: ORBB masks its own windows out of the scan, so anything sitting on top of the game would be a hole in what the scanner can read.
+
 Counters like "3/5" and ticks inside a quest aren't in the logs — they're read off the screen. Open the game's **Tasks** screen (or a trader's task list), press **`]`** or click **SCANNER** at the top of the panel, and the status line turns amber: *"Reading the Tasks screen…"*. Scroll through your list and click the quests you care about; each one you open is read within a second or two. Click SCANNER again (or just leave the screen) to stop.
 
 ---
@@ -121,6 +131,7 @@ Counters like "3/5" and ticks inside a quest aren't in the logs — they're read
 | **`]`** | Start / stop reading the game's Tasks screen (changeable) |
 | **Ctrl + wheel** | Scroll the quest panel from anywhere while it's open |
 | **Middle-click a quest** | Open its page on the wiki |
+| **Drag a quest's left grip** | Reorder the list (remembered) |
 | **F12** | Developer tools |
 
 Each hotkey can be switched off in settings if it clashes with something.
@@ -147,8 +158,11 @@ Make sure the token came from **tarkovtracker.org** (not the old tarkovtracker.i
 **"Fetching Items from Database Failed".**
 tarkov.dev is temporarily unreachable. The app retries every minute on its own; nothing to do.
 
+**Numbers look stuck or a quest shows the wrong percent.**
+Older builds could read ORBB's own panel back off the screen and keep re-confirming whatever it already believed. That's fixed — the app masks its own windows before scanning — and the first run after updating throws the old readings away. Scan once more and the game's real numbers land.
+
 **Hover or Ctrl + wheel stopped working mid-session.**
-Both heal themselves within a few seconds (Windows silently drops the low-level hooks they rely on when a process is slow; the app now re-arms them). If it ever sticks, `'` twice re-opens the panel fresh.
+The panel and map become clickable the moment your cursor is over them (the app checks the cursor position ten times a second rather than trusting window hover events, which Windows delivers unreliably to click-through overlays), and Ctrl + wheel heals itself within seconds if Windows drops the hook behind it. In a raid the game owns the cursor, so the overlays are never clickable there.
 
 ---
 
@@ -164,7 +178,7 @@ No. Measured while the game runs: about **2% of one CPU core** in a raid and ~50
 2. The Electron main process matches that name against a fuzzy index of all ~5,300 items and looks up prices, quest and hideout requirements (from `json.tarkov.dev`) and your TarkovTracker progress.
 3. A transparent always-on-top window draws the tooltip beside your cursor; two more draw the quest panel and the map.
 
-**The Tasks-screen scanner** OCRs the whole screen, rebuilds rows from word positions and picks out task rows (name · map · status · percent — or just name · status on a trader's list), and the open task's objective rows: text, "3/5" counters, and the number of tick-coloured pixels after the text, which is how it knows an objective is done. Names are matched to the quest catalog tolerating the stray letters OCR makes of the icons; the objective rows are assigned to whichever active task they fit best. Only what's on screen can be read, so scroll and click through.
+**The Tasks-screen scanner** OCRs the whole screen — with ORBB's own windows blacked out first, so it can never read its own output back — rebuilds rows from word positions and picks out task rows (name · map · status · percent, or just name · status on a trader's list), and the open task's objective rows: the text, "3/5" counters, the tick-coloured pixels after the text, and whether the game painted that row's band the "done" blue (the sturdier of the two signals). Names are matched to the quest catalog tolerating the stray letters OCR makes of the icons; the objective rows are assigned to whichever active task they fit best. Only what's on screen can be read, so scroll and click through.
 
 **Progress flow:** game logs → accepted / handed in / failed; Tasks screen → counters, ticks, percent; in-raid toasts → subtask done / ready to hand in. All of it is merged in the panel and (if enabled) pushed to TarkovTracker as completions and counters only — it never marks anything *un*-done on the tracker, so a missed read can't undo real progress. Writes are sent only when something is new and batched, because the tracker has a daily write quota.
 

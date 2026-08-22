@@ -14,7 +14,7 @@ export type ScannedTask = {
   key: string; // normalized name
   name: string; // as read from the screen
   taskId: string | null; // catalog match, if any
-  percent: number | null; // null when the screen showed no progress bar
+  percent?: number; // absent when the screen showed no progress bar
   status: string;
   location: string;
   at: number;
@@ -28,6 +28,10 @@ export type ScannedTask = {
 const UNKNOWN_CONFIRMATIONS = 2;
 // Two passes closer together than this are treated as the same reading
 const CONFIRMATION_GAP_MS = 900;
+// Bumped when stored readings stop being trustworthy (see load). v2 masked
+// the app's own overlay out of the scan; v3 is when that masking actually
+// reached the helper (the exclusion rects were being dropped on the way).
+const SCAN_STORE_VERSION = 3;
 
 export type ScannedObjective = {
   key: string; // normalized objective text
@@ -44,6 +48,10 @@ export type ScannedObjectiveState = {
   objectiveId?: string;
   text: string;
   done: boolean;
+  // How many separate reads have seen this objective ticked. Showing it as
+  // done locally on the first sighting is free to undo; writing it to
+  // someone's tracker is not, so that waits for a second look.
+  doneSeen: number;
   // Counter shown on the row ("3/5"), when it has one
   count?: number;
   total?: number;
@@ -64,10 +72,14 @@ type Word = {
   // screen scans with this); the Tasks screen draws a cyan tick after a
   // completed objective
   ticks: number;
+  // Percentage of this word's row band painted the "objective done" blue
+  doneBand: number;
 };
 
 // Enough tick-coloured pixels to be the glyph rather than noise
 const TICK_PIXELS = 25;
+// A row band this blue is a completed objective, tick seen or not
+const DONE_BAND_PERCENT = 55;
 
 // In-raid notification toasts (bottom-right), e.g.
 //   "Subtask completed: Eagle Eye"
@@ -88,6 +100,12 @@ const TOAST_PATTERNS: { kind: ToastEvent["kind"]; pattern: RegExp }[] = [
 ];
 
 const STATUS_PATTERN = /^(activ\w*|comple\w*|lock\w*|fail\w*|avail\w*|done)$/i;
+// The exact status words the trader's task list ends a row with ("active!"
+// reads as "activel"); a looser match would turn objective sentences that
+// happen to end in "complex" or "lockers" into phantom tasks
+const TRADER_STATUS_PATTERN = /^(activ\w{0,2}|completed|locked|failed|available)$/i;
+// A trader-list row is a short name plus its status
+const TRADER_ROW_MAX_TOKENS = 8;
 const PERCENT_PATTERN = /^(\d{1,3})\s*%$/;
 const COUNT_PATTERN = /^(\d{1,4})\s*\/\s*(\d{1,4})$/;
 
@@ -199,6 +217,15 @@ export default class TaskScan {
     return this.stateFor(taskId, objectiveText)?.done;
   }
 
+  // The screen has not changed since the last read. That is not a second
+  // sighting - a row misread once would be "confirmed" by simply standing
+  // still - so nothing is re-counted; we only note that what we know is
+  // still current, which keeps the "scanned just now" line honest.
+  confirmLastRead(): void {
+    if (!this.lastScanAt) return;
+    this.lastScanAt = Date.now();
+  }
+
   // Objective states written at or after a moment (what a scan pass found)
   statesSince(at: number): ScannedObjectiveState[] {
     return [...this.objectiveStates.values()].filter((s) => s.at >= at);
@@ -209,10 +236,8 @@ export default class TaskScan {
   }
 
   percentFor(taskId: string): number | undefined {
-    for (const t of this.tasks.values()) {
-      if (t.taskId === taskId && t.percent !== null) return t.percent;
-    }
-    return undefined;
+    // Matched tasks are stored under their id, so this is a direct lookup
+    return this.tasks.get(`id:${taskId}`)?.percent;
   }
 
   // Scanned objective counts, matched by text (OCR-tolerant contains)
@@ -238,7 +263,14 @@ export default class TaskScan {
     catalog: CatalogTask[],
     mapNames: string[],
     activeTaskIds: Iterable<string> = []
-  ): { tasks: number; objectives: number } {
+  ): {
+    tasks: number;
+    objectives: number;
+    updates: number;
+    newTasks: number;
+    // One line per real change, ready to show ("Break the Deal 19% -> 75%")
+    changes: string[];
+  } {
     const words = parseTsv(tsv);
     const rows = groupRows(words);
     const now = Date.now();
@@ -257,6 +289,30 @@ export default class TaskScan {
 
     let taskRows = 0;
     let objectiveCount = 0;
+    // Things this pass actually changed: new or changed task rows, changed
+    // counters, objective ticks - what the player wants to hear about
+    let updates = 0;
+    let newTasks = 0;
+    const changes: string[] = [];
+
+    // Where the Tasks screen's location column starts, learned from the
+    // rows whose map name read cleanly in this pass. Rows whose location
+    // was misread ("DUreets Tarkov ur") then lose those words from the name
+    // by position instead of by spelling.
+    let locationColumnX: number | null = null;
+    for (const row of rows) {
+      const texts = row.map((w) => w.text);
+      if (!texts.some((t) => PERCENT_PATTERN.test(t))) continue;
+      const statusIdx = texts.findIndex((t) => STATUS_PATTERN.test(t));
+      if (statusIdx < 2) continue;
+      for (let start = statusIdx - 1; start >= Math.max(1, statusIdx - 3); start--) {
+        if (locations.has(wordSetKey(texts.slice(start, statusIdx).join(" ")))) {
+          const x = row[start].left;
+          locationColumnX = locationColumnX === null ? x : Math.min(locationColumnX, x);
+          break;
+        }
+      }
+    }
 
     for (const row of rows) {
       const texts = row.map((w) => w.text);
@@ -275,7 +331,11 @@ export default class TaskScan {
         if (total > 0 && count <= total) {
           const text = stripStrayTokens(stripTrailingCount(joined).split(/\s+/)).join(" ");
           const key = normalizeName(text);
-          if (key.length >= 8) {
+          // Rows that swallowed a neighbour (a status word or percent in
+          // the middle) are not objectives; the text-keyed map is only a
+          // fallback for countFor and its churn is not an "update"
+          const merged = texts.slice(0, -1).some((t) => PERCENT_PATTERN.test(t) || STATUS_PATTERN.test(t));
+          if (key.length >= 8 && !merged) {
             this.objectives.set(key, { key, text, count, total, at: now });
             objectiveRows.push({ text, done: count >= total, count, total });
             objectiveCount++;
@@ -288,7 +348,7 @@ export default class TaskScan {
       if (
         row.length >= 4 &&
         !texts.some((t) => PERCENT_PATTERN.test(t)) &&
-        !texts.slice(-2).some((t) => STATUS_PATTERN.test(t))
+        !isTraderListRow(texts)
       ) {
         // The row starts with an icon and may end with the tick itself,
         // both of which OCR turns into a stray short token
@@ -297,7 +357,11 @@ export default class TaskScan {
         if (normalizeName(text).length >= 12) {
           const tail = trimmed[trimmed.length - 1];
           const ticked = row.slice(row.indexOf(tail)).some((w) => w.ticks >= TICK_PIXELS);
-          objectiveRows.push({ text, done: ticked });
+          // Most of the row's band being blue means the game struck it out
+          // as done, even when the tick glyph itself was missed
+          const banded =
+            trimmed.filter((w) => w.doneBand >= DONE_BAND_PERCENT).length > trimmed.length / 2;
+          objectiveRows.push({ text, done: ticked || banded });
         }
       }
 
@@ -305,7 +369,7 @@ export default class TaskScan {
       // Tasks screen) or "<name> [location] <status>" (trader's task list,
       // which shows no progress bar) ----
       let percentIdx = texts.findIndex((t) => PERCENT_PATTERN.test(t));
-      let percent: number | null = null;
+      let percent: number | undefined;
       // Operational rows on the trader screen end with a countdown, and the
       // trader's task header ends with a loyalty icon read as a stray letter
       let tail = texts.length;
@@ -318,7 +382,7 @@ export default class TaskScan {
       if (percentIdx >= 2) {
         percent = Number(PERCENT_PATTERN.exec(texts[percentIdx])![1]);
         if (!(percent >= 0 && percent <= 100)) continue;
-      } else if (percentIdx < 0 && tail >= 2 && tail <= 10 && STATUS_PATTERN.test(texts[tail - 1])) {
+      } else if (percentIdx < 0 && tail >= 2 && tail <= TRADER_ROW_MAX_TOKENS && TRADER_STATUS_PATTERN.test(texts[tail - 1])) {
         percentIdx = tail;
       } else {
         continue;
@@ -336,14 +400,23 @@ export default class TaskScan {
       let location = "";
       let nameEnd = statusIdx;
       // Narrowest match first so "[Season PvP] Any location" keeps the tag
-      // with the task name
-      for (let start = statusIdx - 1; start >= Math.max(0, statusIdx - 4); start--) {
-        const found = lookupLocation(locations, texts.slice(start, statusIdx).join(" "));
+      // with the task name. Only the character's Tasks screen (the one with
+      // a progress bar) has a location column; on the trader's list the word
+      // before the status is the end of the name, so only an exact map name
+      // counts there ("Big Customer" must not become "Big" on Customs)
+      for (let start = statusIdx - 1; start >= Math.max(1, statusIdx - 4); start--) {
+        const found = lookupLocation(locations, texts.slice(start, statusIdx).join(" "), percent !== undefined);
         if (found) {
           location = found;
           nameEnd = start;
           break;
         }
+      }
+      if (!location && percent !== undefined && locationColumnX !== null) {
+        // Whatever sits in the location column is the location, however
+        // badly it read; it is not part of the name
+        const firstInColumn = row.findIndex((w, i) => i >= 1 && i < statusIdx && w.left >= locationColumnX - 12);
+        if (firstInColumn >= 1) nameEnd = Math.min(nameEnd, firstInColumn);
       }
       const read = texts.slice(0, nameEnd).join(" ").trim();
       if (read.length < 3) continue;
@@ -364,12 +437,31 @@ export default class TaskScan {
         previous && now - previous.at >= CONFIRMATION_GAP_MS
           ? (previous.seen ?? 1) + 1
           : previous?.seen ?? 1;
+      // A screen without a progress bar must not forget a percent we have
+      const nextPercent = percent ?? previous?.percent;
+      if (!previous) {
+        // Reading a quest we already knew about is not a discovery - the
+        // game's log has been telling us about it all along. Only a task no
+        // catalog knows (a rotating Operational one) is actually new.
+        if (!resolved.taskId) {
+          newTasks++;
+          updates++;
+          changes.push(`New task: ${resolved.name}`);
+        }
+      } else if (previous.percent !== nextPercent) {
+        updates++;
+        changes.push(
+          `${resolved.name} ${previous.percent ?? "?"}% → ${nextPercent ?? "?"}%`
+        );
+      } else if (statusKind(previous.status) !== statusKind(status)) {
+        updates++;
+        changes.push(`${resolved.name} is now ${status.toLowerCase()}`);
+      }
       this.tasks.set(key, {
         key,
         name: resolved.name,
         taskId: resolved.taskId,
-        // A screen without a progress bar must not forget a percent we have
-        percent: percent ?? this.tasks.get(key)?.percent ?? null,
+        percent: nextPercent,
         status,
         location,
         at: now,
@@ -378,7 +470,8 @@ export default class TaskScan {
       taskRows++;
     }
 
-    const ticked = this.applyObjectiveRows(objectiveRows, catalog, activeTaskIds, now);
+    const ticked = this.applyObjectiveRows(objectiveRows, catalog, activeTaskIds, now, changes);
+    updates += ticked;
 
     if (taskRows > 0 || objectiveCount > 0 || ticked > 0) {
       this.lastScanAt = now;
@@ -389,7 +482,7 @@ export default class TaskScan {
     log.info(
       `Tasks screen scan: ${taskRows} task rows, ${objectiveCount} counters, ${ticked} objective states`
     );
-    return { tasks: taskRows, objectives: objectiveCount + ticked };
+    return { tasks: taskRows, objectives: objectiveCount + ticked, updates, newTasks, changes };
   }
 
   // The objective rows on screen all belong to the one task that is open,
@@ -399,7 +492,8 @@ export default class TaskScan {
     rows: { text: string; done: boolean; count?: number; total?: number }[],
     catalog: CatalogTask[],
     activeTaskIds: Iterable<string>,
-    now: number
+    now: number,
+    changes: string[]
   ): number {
     if (rows.length === 0) return 0;
     const active = new Set(activeTaskIds);
@@ -439,15 +533,29 @@ export default class TaskScan {
     if (!best || (best.matches.size < 2 && best.task.objectives.length > 1)) return 0;
 
     let changed = 0;
+    // Rows written this pass, whether or not they were worth reporting
+    let stored = 0;
     for (const [i, objective] of best.matches) {
       const key = `${best.task.id}|${normalizeName(objective.text)}`;
       const row = rows[i];
       const previous = this.objectiveStates.get(key);
+      // A tick the OCR misses on one pass does not undo one it saw before,
+      // and a counter only climbs - otherwise every wobble is an "update"
+      const done = row.done || previous?.done === true;
+      // Only this read counts towards corroboration - a sticky `done`
+      // carried over from an earlier pass is not a fresh sighting
+      const doneSeen = (previous?.doneSeen ?? 0) + (row.done ? 1 : 0);
+      const count =
+        row.count !== undefined && previous?.count !== undefined && row.total === previous.total
+          ? Math.max(row.count, previous.count)
+          : row.count ?? previous?.count;
+      const total = row.total ?? previous?.total;
       if (
         previous &&
-        previous.done === row.done &&
-        previous.count === row.count &&
-        previous.total === row.total
+        previous.done === done &&
+        previous.doneSeen === doneSeen &&
+        previous.count === count &&
+        previous.total === total
       ) {
         continue;
       }
@@ -456,11 +564,24 @@ export default class TaskScan {
         taskId: best.task.id,
         objectiveId: objective.id,
         text: objective.text,
-        done: row.done,
-        count: row.count,
-        total: row.total,
+        done,
+        doneSeen,
+        count,
+        total,
         at: now,
       });
+      stored++;
+
+      // News is a tick appearing or a counter moving. Seeing a row for the
+      // first time, still unfinished, is worth storing but is not an update.
+      const short = objective.text.length > 44 ? `${objective.text.slice(0, 44)}...` : objective.text;
+      if (done && !previous?.done) {
+        changes.push(`${best.task.name}: ${short} ✓`);
+      } else if (total !== undefined && count !== undefined && count !== previous?.count) {
+        changes.push(`${best.task.name}: ${short} ${count}/${total}`);
+      } else {
+        continue;
+      }
       changed++;
     }
     if (changed) {
@@ -475,6 +596,7 @@ export default class TaskScan {
             .join(", ")
       );
     }
+    if (stored > 0) this.save();
     return changed;
   }
 
@@ -525,9 +647,25 @@ export default class TaskScan {
     if (!this.file || !fs.existsSync(this.file)) return;
     try {
       const data = JSON.parse(fs.readFileSync(this.file, "utf8"));
+      // Everything read before v2 could have come from the app's own quest
+      // panel being on screen during a full-screen scan (it was not masked),
+      // so those percents and ticks are not evidence about the game
+      if ((data.version ?? 1) < SCAN_STORE_VERSION) {
+        log.info("Discarding Tasks-screen data from before overlay masking");
+        this.lastScanAt = 0;
+        this.lastScanCount = 0;
+        return;
+      }
       for (const t of data.tasks ?? []) this.tasks.set(t.key, t);
-      for (const o of data.objectives ?? []) this.objectives.set(o.key, o);
-      for (const o of data.objectiveStates ?? []) this.objectiveStates.set(o.key, o);
+      for (const o of data.objectives ?? []) {
+        // Drop rows saved before merged-row detection (a status word or
+        // percent inside the objective text means two rows were read as one)
+        if (/(^|\s)(activ|comple|lock|fail|avail)\w*(\s|$)|\d{1,3}\s*%/i.test(o.text)) continue;
+        this.objectives.set(o.key, o);
+      }
+      for (const o of data.objectiveStates ?? []) {
+        this.objectiveStates.set(o.key, { ...o, doneSeen: o.doneSeen ?? (o.done ? 1 : 0) });
+      }
       for (const [k, v] of Object.entries(data.toasts ?? {})) this.toasts.set(k, v as ToastState);
       this.lastScanAt = data.lastScanAt ?? 0;
       this.lastScanCount = data.lastScanCount ?? 0;
@@ -542,6 +680,7 @@ export default class TaskScan {
       fs.writeFileSync(
         this.file,
         JSON.stringify({
+          version: SCAN_STORE_VERSION,
           tasks: [...this.tasks.values()],
           objectives: [...this.objectives.values()],
           objectiveStates: [...this.objectiveStates.values()],
@@ -573,6 +712,7 @@ function parseTsv(tsv: string): Word[] {
       height: Number(cols[9]),
       text,
       ticks: Number(cols[12] ?? 0) || 0,
+      doneBand: Number(cols[13] ?? 0) || 0,
     });
   }
   return words;
@@ -605,6 +745,25 @@ function stripStrayTokens<T>(tokens: T[], text: (t: T) => string = (t) => String
   return out;
 }
 
+// "<name> [location] <status> [countdown / stray icon]" as the trader's task
+// list shows it - short, and ending in one of the exact status words
+function isTraderListRow(texts: string[]): boolean {
+  let tail = texts.length;
+  while (
+    tail > 2 &&
+    (/^\d{1,2}:\d{2}(:\d{2})?$/.test(texts[tail - 1]) || STRAY_TOKEN.test(texts[tail - 1]))
+  ) {
+    tail--;
+  }
+  return tail >= 2 && tail <= TRADER_ROW_MAX_TOKENS && TRADER_STATUS_PATTERN.test(texts[tail - 1]);
+}
+
+// "activel", "active!", "Active" are all the same status
+function statusKind(status: string): string {
+  const m = /^(activ|comple|lock|fail|avail|done)/i.exec(status);
+  return m ? m[1].toLowerCase() : status.toLowerCase();
+}
+
 function stripTrailingCount(text: string): string {
   return text.replace(/\s*\d{1,4}\s*\/\s*\d{1,4}\s*$/, "").trim();
 }
@@ -616,11 +775,11 @@ function wordSetKey(text: string): string {
 
 // A map name / "Any location", tolerating a couple of OCR slips ("Any
 // locati", "Shoreine")
-function lookupLocation(locations: Map<string, string>, text: string): string | undefined {
+function lookupLocation(locations: Map<string, string>, text: string, fuzzy = true): string | undefined {
   const key = wordSetKey(text);
   if (!key) return undefined;
   const exact = locations.get(key);
-  if (exact) return exact;
+  if (exact || !fuzzy) return exact;
   for (const [candidate, name] of locations) {
     if (Math.abs(candidate.length - key.length) <= 2 && levenshtein(candidate, key) <= 2) return name;
   }
@@ -688,12 +847,17 @@ function matchExact(index: MiniSearch, catalog: CatalogTask[], read: string): st
 function matchContained(catalog: CatalogTask[], read: string): string | null {
   const wanted = ` ${normalizeName(read)} `;
   if (wanted.length < 10) return null;
+  const wordCount = wanted.trim().split(" ").length;
   let best: { id: string; length: number } | null = null;
   for (const task of catalog) {
     const name = normalizeName(task.name);
-    // Short names ("Debut", "Setup") would match inside all sorts of text
-    if (name.length < 9) continue;
-    if (!wanted.includes(` ${name} `)) continue;
+    if (name.length < 5) continue;
+    // The name column comes first on the Tasks screen, so a catalog name
+    // at the very start followed by a few words of debris (a misread
+    // location) is that task; buried deeper it needs to be long enough not
+    // to match inside unrelated text ("Debut", "Setup")
+    const atStart = wanted.startsWith(` ${name} `) && wordCount - name.split(" ").length <= 3;
+    if (!atStart && (name.length < 9 || !wanted.includes(` ${name} `))) continue;
     if (!best || name.length > best.length) best = { id: task.id, length: name.length };
   }
   return best?.id ?? null;
@@ -771,7 +935,9 @@ function cleanUnknownName(
   const vocabulary = catalogVocabulary(catalog);
   const longWords = normalizeName(name).split(" ").filter((w) => w.length >= 3);
   const known = longWords.filter((w) => vocabulary.has(w)).length;
-  if (longWords.length > 0 && known / longWords.length < 0.6) return null;
+  // Nearly every word of a real name is game English; one misread word in
+  // three ("Dandies DUreets Tarkov") is a misread row, not a new task
+  if (longWords.length > 0 && (known < 2 || known / longWords.length < 0.75)) return null;
   const wanted = ` ${normalizeName(name)} `;
   const fragment = catalog.some((t) => {
     const full = ` ${normalizeName(t.name)} `;

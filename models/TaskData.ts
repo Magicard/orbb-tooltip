@@ -14,24 +14,14 @@ const CURRENCY_ITEM_IDS = new Set([
   "569668774bdc2da2298b4568",
 ]);
 
-// TarkovTracker progress API. The api.tarkovtracker.org gateway is primary
-// and tarkovtracker.org serves the same route during its deprecation
-// window. tarkovtracker.io is the legacy site with its own accounts and
-// token format; tokens created there only work against it, so it is tried
-// last so existing users are not locked out.
-const TRACKER_PROGRESS_URLS = [
-  "https://api.tarkovtracker.org/api/v2/progress",
-  "https://tarkovtracker.org/api/v2/progress",
-  "https://tarkovtracker.io/api/v2/progress",
-];
-const LEGACY_TRACKER_HOST = "tarkovtracker.io";
+import {
+  LEGACY_TRACKER_HOST,
+  TRACKER_TIMEOUT_MS,
+  TRACKER_USER_AGENT,
+  trackerUrls,
+} from "./trackerApi";
 
-// The gateway rejects requests whose User-Agent is shorter than 5 chars,
-// and Electron's main-process fetch sends just "node"
-const TRACKER_USER_AGENT =
-  "orbb-tooltip/1.0 (+https://github.com/Magicard/orbb-tooltip)";
-
-const TRACKER_TIMEOUT_MS = 15 * 1000;
+const TRACKER_PROGRESS_URLS = trackerUrls("/progress");
 
 type TarkovDevObjective = {
   id: string;
@@ -158,6 +148,8 @@ export type QuestPanelObjective = {
   optional: boolean;
   here: boolean; // applies to the current map
   anywhere: boolean; // no map restriction
+  // Something done in a raid (as opposed to handing items over etc.)
+  inRaid: boolean;
 };
 
 export type QuestPanelQuest = {
@@ -167,6 +159,13 @@ export type QuestPanelQuest = {
   kappa: boolean;
   // Community wiki page (middle-click a quest to open it)
   wiki: string;
+  // Every objective of the quest, all maps and kinds (the "done" toggle
+  // lists these; `objectives` is the subset this list is about)
+  allObjectives: QuestPanelObjective[];
+  // Everything this list is about is done, but the quest is still open
+  doneHere?: boolean;
+  // Every objective of the whole quest is done as far as we know
+  allDone?: boolean;
   objectives: QuestPanelObjective[];
   // Overall progress read from the in-game Tasks screen, if scanned
   percent?: number;
@@ -177,9 +176,16 @@ export type QuestPanelQuest = {
 
 // A task the game lists but no catalog knows (Operational daily/weekly
 // tasks), known only from scanning the Tasks screen
+// One thing that changed about a quest, and where we learned it
+export type QuestChange = {
+  at: number;
+  text: string;
+  source: "scan" | "game" | "raid" | "tracker";
+};
+
 export type QuestPanelOperational = {
   name: string;
-  percent: number | null;
+  percent?: number;
   location: string;
 };
 
@@ -204,6 +210,8 @@ export type QuestPanelData = {
   perMap: { mapName: string; quests: number }[];
   operational: QuestPanelOperational[];
   scanned: { at: number; count: number } | null;
+  // Most recent quest changes from any source, newest first
+  changes: QuestChange[];
   // An image exists in the maps folder for this map (shows the Map button)
   hasMapImage?: boolean;
   updatedAt: number;
@@ -800,7 +808,8 @@ export default class TaskData {
       raidKind: "pmc" | "scav" | "unknown";
     },
     questEvents?: QuestEventMap | null,
-    scan?: TaskScan | null
+    scan?: TaskScan | null,
+    changes: QuestChange[] = []
   ): Promise<QuestPanelData> {
     const [catalog, maps, traderNames] = await Promise.all([
       this.loadTaskCatalog(gameMode),
@@ -841,6 +850,7 @@ export default class TaskData {
             .sort((a, b) => a.name.localeCompare(b.name))
         : [],
       scanned: scan && scan.getLastScan().at ? scan.getLastScan() : null,
+      changes,
       updatedAt: Date.now(),
     };
     if (!progress && !useLogs) return empty;
@@ -864,16 +874,20 @@ export default class TaskData {
       objectiveFilter: (o: CatalogObjective) => boolean
     ): QuestPanelQuest | null => {
       const toast = scan?.toastFor(task.id, task.name);
-      const objectives: QuestPanelObjective[] = task.objectives
-        .filter(objectiveFilter)
+      const allObjectives: QuestPanelObjective[] = task.objectives
         .map((o) => {
           const p = objectiveState(o.id);
           // Progress read off the Tasks screen for this row; a "find" objective
           // also counts what its "hand over" twin has already received
           const state = scan?.stateFor(task.id, o.text);
+          // Only when the task has a single hand-over objective: tasks like
+          // Aid Stations list one identical "Hand over the item" per key, the
+          // game shows a single ticked row for it, and pairing that with
+          // every key would mark them all done
+          const giveItems = task.objectives.filter((s) => s.type === "giveItem");
           const twin =
-            o.type === "findItem"
-              ? task.objectives.find((s) => s.type === "giveItem" && s.count === o.count)
+            o.type === "findItem" && giveItems.length === 1 && giveItems[0].count === o.count
+              ? giveItems[0]
               : undefined;
           const twinState = twin ? scan?.stateFor(task.id, twin.text) : undefined;
           const scannedCount = state?.total ? state.count ?? 0 : scan?.countFor(o.text)?.count ?? 0;
@@ -889,13 +903,18 @@ export default class TaskData {
             total: o.count,
             optional: o.optional,
             here: currentMap ? o.mapIds.includes(currentMap.id) : false,
+            inRaid: IN_RAID_OBJECTIVE_TYPES.has(o.type),
             anywhere: o.mapIds.length === 0,
           };
         });
+      const wanted = new Set(task.objectives.filter(objectiveFilter).map((o) => o.id));
+      const objectives = allObjectives.filter((o) => wanted.has(o.id));
       if (objectives.length === 0) return null;
-      // Keep fully-done quests visible while they are "ready to be
-      // completed" (hand-in pending), drop them otherwise
-      if (objectives.every((o) => o.done) && !toast?.ready) return null;
+      // An accepted quest is never dropped because we believe its work is
+      // done - that belief can be wrong (a misread tick) and the player
+      // still has to hand it in. It stays, flagged, sorted last.
+      const doneHere = objectives.every((o) => o.done);
+      const allDone = allObjectives.every((o) => o.done);
       // Unfinished first, then done ones as feedback
       objectives.sort((a, b) => Number(a.done) - Number(b.done));
       const percent = scan?.percentFor(task.id);
@@ -904,11 +923,25 @@ export default class TaskData {
           o.done = true;
           o.count = o.total;
         }
-      } else if (toast && toast.subtasks > 0 && objectives.length === 1) {
-        objectives[0].done = true;
-        objectives[0].count = objectives[0].total;
+      } else if (toast && toast.subtasks > 0) {
+        // "Subtask completed" does not say which one. If only one objective
+        // is outstanding it must be that; in a raid we can also pin it on
+        // the one that belongs to the map you are actually on.
+        // Judged over the whole quest, not just the objectives this list
+        // shows: a two-map quest shows one per map, and the toast could
+        // just as well have been about the other one
+        const open = allObjectives.filter((o) => !o.done && !o.optional && o.inRaid);
+        const onThisMap = state.inRaid
+          ? open.filter((o) => currentMap && o.here && !o.anywhere)
+          : [];
+        const target = open.length === 1 ? open[0] : onThisMap.length === 1 ? onThisMap[0] : null;
+        if (target) {
+          target.done = true;
+          target.count = target.total;
+        }
       }
-      // A single-objective quest's percent is its counter
+      // A single-objective quest's percent is its counter - an estimate, so
+      // it may fill the bar but never complete the objective on its own
       if (
         percent !== undefined &&
         objectives.length === 1 &&
@@ -916,7 +949,7 @@ export default class TaskData {
         objectives[0].total > 1
       ) {
         objectives[0].count = Math.min(
-          objectives[0].total,
+          objectives[0].total - (objectives[0].done ? 0 : 1),
           Math.round((percent / 100) * objectives[0].total)
         );
       }
@@ -927,6 +960,13 @@ export default class TaskData {
         kappa: task.kappaRequired,
         wiki: taskWikiUrl(task.name, task.wikiLink),
         objectives,
+        // The game shows one row per distinct wording (Aid Stations has four
+        // identical "Hand over the item" entries), so list it that way too
+        allObjectives: allObjectives.filter(
+          (o, i, list) => list.findIndex((x) => x.text === o.text) === i
+        ),
+        doneHere: doneHere || undefined,
+        allDone: allDone || undefined,
         percent,
         ready: toast?.ready || undefined,
         subtasksDone: toast?.subtasks || undefined,
@@ -948,7 +988,7 @@ export default class TaskData {
             inRaid(o) &&
             (o.mapIds.includes(currentMap.id) || o.mapIds.length === 0)
         );
-        if (q && q.objectives.some((o) => o.here && !o.done)) {
+        if (q && q.objectives.some((o) => o.here)) {
           here.push(q);
           continue;
         }
@@ -974,7 +1014,9 @@ export default class TaskData {
     }
 
     const byName = (a: QuestPanelQuest, b: QuestPanelQuest) =>
-      a.trader.localeCompare(b.trader) || a.name.localeCompare(b.name);
+      Number(!!a.doneHere) - Number(!!b.doneHere) ||
+      a.trader.localeCompare(b.trader) ||
+      a.name.localeCompare(b.name);
     here.sort(byName);
     anywhere.sort(byName);
 

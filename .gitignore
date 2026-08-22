@@ -137,3 +137,18 @@ lib/**/*.FileListAbsolute.txt
 # Executables
 *.out
 *.app
+
+# AI assistant instructions and scratch state - personal to whoever is working
+# on the repo, not part of the project
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+GEMINI.md
+.claude/
+.cursor/
+.cursorrules
+.cursorignore
+.windsurfrules
+.aider*
+.continue/
+.github/copilot-instructions.md

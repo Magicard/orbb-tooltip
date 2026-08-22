@@ -198,8 +198,11 @@ export default class Items {
           availableOnFleaMarket:
             !(item.types ?? []).includes("noFlea") && item.lastLowPrice != null,
           prices: {
-            latest: item.avg24hPrice ?? 0,
-            avgDay: item.avg24hPrice ?? 0,
+            // The cheapest offer tarkov.dev last saw, and the 24h average.
+            // Collapsing both onto avg24hPrice (as the API migration did)
+            // threw away the only "what it goes for right now" figure.
+            latest: item.lastLowPrice ?? item.avg24hPrice ?? 0,
+            avgDay: item.avg24hPrice ?? item.lastLowPrice ?? 0,
             trader: bestTraderOffer,
           },
           slots: item.width * item.height,

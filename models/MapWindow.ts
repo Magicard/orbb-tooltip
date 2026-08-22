@@ -1,5 +1,6 @@
 import { BrowserWindow, screen } from "electron";
 import IpcConstants from "./IpcConstants";
+import ClickThrough from "./ClickThrough";
 
 declare const MAP_WINDOW_WEBPACK_ENTRY: string;
 declare const MAP_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
@@ -28,7 +29,7 @@ export default class MapWindow extends BrowserWindow {
   private bounds: MapWindowBounds;
   private lastData: MapWindowData | null;
   private hideTimer: NodeJS.Timeout | null;
-  private interactive: boolean;
+  private clickThrough: ClickThrough;
   public onVisibilityChange: ((visible: boolean) => void) | null;
 
   constructor(saved?: Partial<MapWindowBounds>) {
@@ -57,13 +58,13 @@ export default class MapWindow extends BrowserWindow {
     });
 
     this.mapVisible = false;
-    this.interactive = false;
+    this.clickThrough = new ClickThrough(this, () => this.mapVisible);
     this.bounds = { x, y, width, height };
     this.lastData = null;
     this.hideTimer = null;
     this.onVisibilityChange = null;
 
-    this.setIgnoreMouseEvents(true, { forward: true });
+    this.setIgnoreMouseEvents(true);
     this.setAlwaysOnTop(true, "screen-saver");
     this.loadURL(MAP_WINDOW_WEBPACK_ENTRY);
   }
@@ -81,21 +82,11 @@ export default class MapWindow extends BrowserWindow {
   }
 
   setInteractive(enabled: boolean): void {
-    if (this.isDestroyed()) return;
-    this.interactive = enabled && this.mapVisible;
-    this.setIgnoreMouseEvents(!this.interactive, { forward: true });
+    this.clickThrough.set(enabled);
   }
 
-  // Click-through windows learn the cursor is over them from mouse moves
-  // Electron forwards via a low-level hook - which Windows silently drops
-  // if the app is ever slow. Dropping and re-arming forwarding reinstalls
-  // it; index.ts does this for every overlay window every few seconds.
-  // "drop" then "arm" must run on all windows in that order, because the
-  // hook is shared and only reinstalled once no window is forwarding.
-  forwardingCycle(phase: "drop" | "arm"): void {
-    if (this.isDestroyed() || !this.mapVisible || this.interactive) return;
-    if (phase === "drop") this.setIgnoreMouseEvents(true);
-    else this.setIgnoreMouseEvents(true, { forward: true });
+  isInteractive(): boolean {
+    return this.clickThrough.get();
   }
 
   sendData(data: MapWindowData): void {
@@ -141,8 +132,7 @@ export default class MapWindow extends BrowserWindow {
     if (this.isDestroyed()) return;
     if (!this.mapVisible) return;
     this.mapVisible = false;
-    this.interactive = false;
-    this.setIgnoreMouseEvents(true, { forward: true });
+    this.clickThrough.reset();
     this.webContents.send(IpcConstants.MapWindowVisibility, false);
     this.hideTimer = setTimeout(() => {
       this.hideTimer = null;

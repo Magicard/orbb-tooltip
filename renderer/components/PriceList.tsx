@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useReducer, useMemo } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import {
   IN_SCREEN_CONFIG,
   NO_SCANNING_CONFIG_FOUND,
@@ -13,6 +13,7 @@ import {
 import { ImmutableObject, useHookstate } from "@hookstate/core";
 import {
   classNames,
+  fleaPrice,
   getItemsPricePerSlot,
   numberWithCommas,
 } from "../../utils";
@@ -83,42 +84,6 @@ export default function PriceList() {
   const [mapHotkey, setMapHotkey] = useState(DEFAULT_MAP_HOTKEY);
 
   // Reducer for calculating total loot value
-  type TotalLootValueState = number;
-  type TotalLootValueAction = {
-    type: "CALCULATE";
-    priceList: typeof priceList;
-  };
-
-  function totalLootValueReducer(
-    state: TotalLootValueState,
-    action: TotalLootValueAction
-  ): TotalLootValueState {
-    if (action.type === "CALCULATE") {
-      if (!action.priceList) {
-        return 0;
-      }
-      return [...action.priceList].reduce((total, item) => {
-        if (!item) return total;
-        const count = item.count > 0 ? item.count : 1;
-        const price = getItemsPricePerSlot(item as ClientItem) * item.slots;
-        return count * price + total;
-      }, 0);
-    }
-    return state;
-  }
-
-  const [totalLootValue, dispatchTotalLootValue] = useReducer(
-    totalLootValueReducer,
-    0
-  );
-
-  // Recalculate total loot value when priceList changes
-  useEffect(() => {
-    if (priceList) {
-      dispatchTotalLootValue({ type: "CALCULATE", priceList });
-    }
-  }, [priceList]);
-
   // What the whole log is worth on the flea market and sold to traders
   const totals = useMemo(() => {
     let market = 0;
@@ -126,7 +91,7 @@ export default function PriceList() {
     for (const item of priceList ?? []) {
       if (!item) continue;
       const count = item.count > 0 ? item.count : 1;
-      market += count * fleaPriceOf(item as ClientItem);
+      market += count * fleaPrice(item as ClientItem);
       trader += count * (item.prices?.trader?.price ?? 0);
     }
     return { market, trader };
@@ -253,15 +218,13 @@ export default function PriceList() {
 
   // Search log: newest scan at the top (the list itself is in scan order)
   const searchLog = useMemo(() => [...priceList].reverse(), [priceList]);
-  // Lowest value last - what F2 removes
+  // What F2 removes: the last item after the same stable sort by per-slot
+  // value that removeItemFromPriceList uses, so ties agree
   const lowestValueId = useMemo(() => {
-    let lowest: ImmutableObject<ClientItem> | null = null;
-    for (const item of priceList) {
-      if (!lowest || getItemsPricePerSlot(item as ClientItem) < getItemsPricePerSlot(lowest as ClientItem)) {
-        lowest = item;
-      }
-    }
-    return lowest?.id ?? null;
+    const sorted = [...priceList].sort(
+      (a, b) => getItemsPricePerSlot(b as ClientItem) - getItemsPricePerSlot(a as ClientItem)
+    );
+    return sorted.length ? sorted[sorted.length - 1].id : null;
   }, [priceList]);
   
 
@@ -530,12 +493,6 @@ export default function PriceList() {
   return <div></div>;
 }
 
-// Flea value of the whole item (lower of the two averages, like the tooltip)
-function fleaPriceOf(item: ClientItem): number {
-  if (!item.availableOnFleaMarket) return 0;
-  return Math.min(item.prices.avgDay, item.prices.latest);
-}
-
 function HeaderButton({
   title,
   onClick,
@@ -580,7 +537,7 @@ function SearchLogRow({
   lowest: boolean;
   showPerSlot: boolean;
 }) {
-  const flea = fleaPriceOf(item as ClientItem);
+  const flea = fleaPrice(item as ClientItem);
   const trader = item.prices?.trader?.price ?? 0;
   const traderName = item.prices?.trader?.name ?? "";
   const count = item.count > 1 ? item.count : 1;

@@ -1,6 +1,11 @@
 import fs from "fs";
 import path from "path";
 import log from "electron-log";
+import {
+  TRACKER_API_BASES,
+  TRACKER_TIMEOUT_MS,
+  TRACKER_USER_AGENT,
+} from "./trackerApi";
 
 // Pushes what this app learns about quest progress - task completions from
 // the game's logs, objective completions and counters read off the Tasks
@@ -15,14 +20,7 @@ import log from "electron-log";
 export type TrackerTaskState = "completed" | "failed";
 export type TrackerObjectiveUpdate = { state?: "completed"; count?: number };
 
-const TRACKER_API_BASES = [
-  "https://api.tarkovtracker.org/api/v2",
-  "https://tarkovtracker.org/api/v2",
-  "https://tarkovtracker.io/api/v2",
-];
-const USER_AGENT = "orbb-tooltip/1.0 (+https://github.com/Magicard/orbb-tooltip)";
 const FLUSH_DELAY_MS = 4000;
-const TIMEOUT_MS = 15 * 1000;
 const RATE_LIMIT_BACKOFF_MS = 15 * 60 * 1000;
 const ERROR_BACKOFF_MS = 3 * 60 * 1000;
 
@@ -44,6 +42,7 @@ export default class TrackerSync {
   private pendingObjectives = new Map<string, TrackerObjectiveUpdate>();
   private timer: NodeJS.Timeout | null = null;
   private flushing = false;
+  private held = false;
   private base: string | null = null;
   private blockedUntil = 0;
   private lastError: string | null = null;
@@ -112,8 +111,21 @@ export default class TrackerSync {
     this.schedule();
   }
 
+  // While held, findings still queue up but nothing is sent. A scan session
+  // holds for its whole run so minutes of reading cost one round of writes
+  // instead of one every few seconds.
+  hold(): void {
+    this.held = true;
+  }
+
+  release(): void {
+    if (!this.held) return;
+    this.held = false;
+    this.schedule();
+  }
+
   private schedule(): void {
-    if (!this.enabled || !this.token || this.timer) return;
+    if (!this.enabled || !this.token || this.held || this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.flush();
@@ -121,7 +133,7 @@ export default class TrackerSync {
   }
 
   async flush(): Promise<void> {
-    if (this.flushing || !this.enabled || !this.token) return;
+    if (this.flushing || this.held || !this.enabled || !this.token) return;
     if (Date.now() < this.blockedUntil) return;
     if (this.pendingTasks.size === 0 && this.pendingObjectives.size === 0) return;
     this.flushing = true;
@@ -177,7 +189,7 @@ export default class TrackerSync {
     let rejected = 0;
     for (const base of bases) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      const timeout = setTimeout(() => controller.abort(), TRACKER_TIMEOUT_MS);
       try {
         const res = await fetch(base + route, {
           method: "POST",
@@ -185,7 +197,7 @@ export default class TrackerSync {
             Accept: "application/json",
             "Content-Type": "application/json",
             Authorization: `Bearer ${this.token}`,
-            "User-Agent": USER_AGENT,
+            "User-Agent": TRACKER_USER_AGENT,
           },
           body: JSON.stringify(body),
           signal: controller.signal,

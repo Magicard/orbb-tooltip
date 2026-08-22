@@ -28,7 +28,6 @@ declare global {
       onConfigChanged: (callback: (config: UserConfig) => void) => void;
       reportTooltipSize: (size: { width: number; height: number }) => void;
       // Exposed by the quest panel preload only (see ./questpanel.ts)
-      setPanelInteractive: (enabled: boolean) => void;
       setPanelBounds: (
         patch: { y?: number; height?: number; width?: number },
         commit: boolean
@@ -42,7 +41,6 @@ declare global {
       toggleScan: () => void;
       requestScanStatus: () => void;
       // Exposed by the map window preload only (see ./map.ts)
-      setMapInteractive: (enabled: boolean) => void;
       setMapBounds: (
         patch: { x?: number; y?: number; width?: number; height?: number },
         commit: boolean

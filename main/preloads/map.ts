@@ -10,9 +10,6 @@ contextBridge.exposeInMainWorld("electron", {
   getUserConfig: () => {
     return ipcRenderer.invoke(IpcConstants.GetUserConfig);
   },
-  setMapInteractive: (enabled: boolean) => {
-    ipcRenderer.send(IpcConstants.MapWindowInteractive, enabled);
-  },
   setMapBounds: (
     patch: { x?: number; y?: number; width?: number; height?: number },
     commit: boolean

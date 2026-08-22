@@ -30,12 +30,15 @@ import {
   DEFAULT_QUEST_PANEL_HOTKEY,
   DEFAULT_QUEST_SCAN_HOTKEY,
   DEFAULT_MAP_HOTKEY,
+  GameMode,
 } from "../models/UserConfig";
 import QuestPanelWindow from "../models/QuestPanelWindow";
 import GameLogWatcher from "../models/GameLogWatcher";
 import TaskScan from "../models/TaskScan";
 import MapWindow from "../models/MapWindow";
 import TrackerSync from "../models/TrackerSync";
+import type { QuestChange } from "../models/TaskData";
+import koffi from "koffi";
 
 // Hotkey registration functions
 function registerHotkeys(userConfig: UserConfig) {
@@ -257,19 +260,133 @@ try {
   // Map the user picked in the panel; cleared when a new raid starts
   let questPanelMapOverride: string | null = null;
   let taskScan: TaskScan | null = null;
+  // Everything learned about quests lately, newest first, whatever told us:
+  // the Tasks-screen scanner, the game's log, an in-raid toast, the tracker
+  const recentChanges: QuestChange[] = [];
+  // Task names by id, so log events can be reported by name
+  const questCatalogNames = new Map<string, string>();
+
+  // ---- TarkovTracker as the shared source of truth -------------------
+  // Out of raid the tracker is polled (and pulled on demand when the panel
+  // opens), so anything TarkovMonitor - or you on another device - marked
+  // there lands here too. In raid we leave the network alone.
+  // Set once the quest panel exists; refreshes whatever is on screen
+  let requestPanelRefresh: (() => void) | null = null;
+  const TRACKER_POLL_MS = 3 * 60 * 1000;
+  const TRACKER_MIN_GAP_MS = 45 * 1000;
+  let trackerPollTimer: NodeJS.Timeout | null = null;
+  let lastTrackerPullAt = 0;
+  let trackerPullInFlight: Promise<void> | null = null;
+
+  const pullTrackerProgress = (reason: string, force = false): Promise<void> => {
+    const config = getUserConfigData();
+    const token = config.tarkovTrackerApiToken?.trim();
+    if (!items || !token) return Promise.resolve();
+    if (!force && Date.now() - lastTrackerPullAt < TRACKER_MIN_GAP_MS) return Promise.resolve();
+    if (trackerPullInFlight) return trackerPullInFlight;
+    lastTrackerPullAt = Date.now();
+    const before = items.taskData.getLastProgress();
+    const previousDone = new Set(before?.completedTaskIds ?? []);
+    const knownBefore = !!before;
+    trackerPullInFlight = items
+      .refreshTrackerProgress(getGameMode(config), token)
+      .then((progress) => {
+        if (!progress) return;
+        // Only report what is new to us, and only once we had something to
+        // compare against (the first pull is not "news")
+        if (knownBefore) {
+          const fresh = [...progress.completedTaskIds].filter(
+            (id) =>
+              !previousDone.has(id) &&
+              // Not something the game's log already told us about (it says
+              // "handed in" for the same event, minutes earlier)
+              gameLog?.getQuestEvents().get(id)?.status !== "finished"
+          );
+          noteChanges(
+            // Named, so several completions cannot collapse into one line
+            fresh.map((id) => `${questCatalogNames.get(id) ?? `Quest ${id.slice(0, 6)}`} completed`),
+            "tracker"
+          );
+        }
+        log.info(`TarkovTracker progress pulled (${reason})`);
+        requestPanelRefresh?.();
+      })
+      .catch((error) => log.warn(`TarkovTracker pull failed (${reason}):`, error))
+      .finally(() => {
+        trackerPullInFlight = null;
+      });
+    return trackerPullInFlight;
+  };
+
+  // What an overlay depends on, checked (and put right) the moment it opens:
+  // the native helper alive and hooked, and the window really on top. Cheap,
+  // and it turns "it stopped working" into "it fixed itself".
+  const preflightOverlays = (what: string): void => {
+    const fixed = ocr?.ensureHelperReady() ?? [];
+    for (const win of [questPanel, mapWindow]) {
+      if (!win || win.isDestroyed() || !win.isVisible()) continue;
+      win.setAlwaysOnTop(true, "screen-saver");
+    }
+    if (fixed.length > 0) log.info(`Preflight (${what}): ${fixed.join("; ")}`);
+  };
+
+  const startTrackerPolling = (): void => {
+    if (trackerPollTimer) return;
+    trackerPollTimer = setInterval(() => {
+      if (gameLog?.state.inRaid) return; // busy playing; the log covers us
+      void pullTrackerProgress("poll");
+    }, TRACKER_POLL_MS);
+  };
+  const MAX_RECENT_CHANGES = 40;
+  const noteChanges = (texts: string[], source: QuestChange["source"]): void => {
+    if (texts.length === 0) return;
+    const at = Date.now();
+    for (const text of texts) {
+      // The same fact arriving twice in a row (a re-read, a re-emitted log
+      // line) is not news
+      if (recentChanges.some((c) => c.text === text && at - c.at < 60 * 1000)) continue;
+      recentChanges.unshift({ at, text, source });
+    }
+    recentChanges.splice(MAX_RECENT_CHANGES);
+    for (const text of texts) log.info(`Quest change (${source}): ${text}`);
+  };
   let trackerSync: TrackerSync | null = null;
 
-  // Pushes progress to TarkovTracker unless the token / setting say no
+  // Pushes progress to TarkovTracker unless the token / setting say no.
+  // Configured once here and again only when those settings change.
   const getTrackerSync = (): TrackerSync => {
     if (!trackerSync) {
       trackerSync = new TrackerSync(app.getPath("userData"));
-      trackerSync.onStatus = (status) => {
-        if (status.lastError) log.warn(`TarkovTracker sync: ${status.lastError}`);
-      };
+      const config = getUserConfigData();
+      trackerSync.configure(config.tarkovTrackerApiToken ?? null, config.syncToTracker !== false);
     }
-    const config = getUserConfigData();
-    trackerSync.configure(config.tarkovTrackerApiToken ?? null, config.syncToTracker !== false);
     return trackerSync;
+  };
+
+  // Game mode a TarkovTracker token was minted for, from its prefix
+  const tokenGameMode = (token: string | undefined): GameMode | null =>
+    token?.startsWith("SZN_") ? "pvp-season" : token?.startsWith("PVE_") ? "pve" : token?.startsWith("PVP_") ? "regular" : null;
+  // Game mode the game itself says it is in (from its log), when known
+  const sessionGameMode = (): GameMode | null => {
+    const mode = gameLog?.state.sessionMode?.toLowerCase() ?? "";
+    return mode.includes("season") ? "pvp-season" : mode.includes("pve") ? "pve" : mode ? "regular" : null;
+  };
+  let pushBlockReason: string | null = null;
+  // Only push when the game, the app's game mode and the token all agree -
+  // progress from one wipe or mode must never land on another profile
+  const canPushToTracker = (): boolean => {
+    const config = getUserConfigData();
+    const appMode = getGameMode(config);
+    const tokenMode = tokenGameMode(config.tarkovTrackerApiToken);
+    const liveMode = sessionGameMode();
+    let reason: string | null = null;
+    if (tokenMode && tokenMode !== appMode) reason = `token is for ${tokenMode}, app is set to ${appMode}`;
+    else if (liveMode && liveMode !== appMode) reason = `game is in ${liveMode}, app is set to ${appMode}`;
+    if (reason !== pushBlockReason) {
+      pushBlockReason = reason;
+      if (reason) log.warn(`TarkovTracker sync paused: ${reason}`);
+    }
+    return reason === null;
   };
 
   // What the tracker already knows, so nothing it has is sent again
@@ -402,7 +519,22 @@ try {
 
     // ---- In-raid quest panel -------------------------------------------
     // Debounced: several log events can arrive within the same second
+    requestPanelRefresh = () => pushQuestPanelData();
+
+    function pushProfileInfo() {
+      const progress = items?.taskData.getLastProgress();
+      void mainWindow.then((win) => {
+        if (win.isDestroyed()) return;
+        win.webContents.send(IpcConstants.ProfileInfo, {
+          displayName: progress?.displayName ?? null,
+          playerLevel: progress?.playerLevel ?? null,
+          pmcFaction: progress?.pmcFaction ?? null,
+        });
+      });
+    }
+
     function pushQuestPanelData() {
+      pushProfileInfo();
       if (!questPanel || !gameLog || !items) return;
       if (questPanelPushTimer) clearTimeout(questPanelPushTimer);
       questPanelPushTimer = setTimeout(async () => {
@@ -420,15 +552,11 @@ try {
               inRaid: questPanelMapOverride ? false : state.inRaid,
             },
             gameLog!.getQuestEvents(),
-            taskScan
+            taskScan,
+            recentChanges
           );
           data.mapOverride = !!questPanelMapOverride;
-          const progress = items.taskData.getLastProgress();
-          (await mainWindow).webContents.send(IpcConstants.ProfileInfo, {
-            displayName: progress?.displayName ?? null,
-            playerLevel: progress?.playerLevel ?? null,
-            pmcFaction: progress?.pmcFaction ?? null,
-          });
+          for (const q of [...data.here, ...data.anywhere]) questCatalogNames.set(q.id, q.name);
           const imageUrl = findMapImage(data.mapNameId, data.mapName);
           data.hasMapImage = !!imageUrl;
           questPanel?.sendData(data);
@@ -481,34 +609,49 @@ try {
       gameLog.on("raid-started", pushQuestPanelData);
       // Accepting / handing in a quest in the menu shows up immediately,
       // in the panel and in item tooltips
+      // Quest states as they stood at the previous emission: only what
+      // changes from here on is live play - the history replayed from old
+      // log folders (other wipes, other modes) is never pushed anywhere
+      let lastQuestStates: Map<string, string> | null = null;
       gameLog.on("quest-events", () => {
         const events = gameLog!.getQuestEvents();
         void items.setQuestEvents(events);
+        // Only what changed since the last emission is live play; the first
+        // read replays every log folder on disk
+        const justHappened = lastQuestStates
+          ? [...events].filter(([id, e]) => lastQuestStates?.get(id) !== e.status)
+          : [];
         // The logs are the truth for hand-ins and failures: tell the tracker
-        // (once we know what it already has - otherwise the startup replay
-        // would resend every quest ever finished)
-        const sync = getTrackerSync();
-        const known = items.taskData.getLastProgress();
-        for (const [taskId, event] of known ? events : []) {
-          const state =
-            event.status === "finished" ? "completed" : event.status === "failed" ? "failed" : null;
-          if (state && !trackerHasTask(taskId, state)) sync.queueTask(taskId, state);
+        // about the ones it does not have yet
+        if (items.taskData.getLastProgress() && canPushToTracker()) {
+          const sync = getTrackerSync();
+          for (const [taskId, event] of justHappened) {
+            const state =
+              event.status === "finished" ? "completed" : event.status === "failed" ? "failed" : null;
+            if (state && !trackerHasTask(taskId, state)) sync.queueTask(taskId, state);
+          }
         }
+        noteChanges(
+          justHappened.map(([taskId, event]) => {
+            const name = questCatalogNames.get(taskId) ?? "A quest";
+            return event.status === "finished"
+              ? `${name} handed in`
+              : event.status === "failed"
+                ? `${name} failed`
+                : `${name} accepted`;
+          }),
+          "game"
+        );
+        lastQuestStates = new Map([...events].map(([id, e]) => [id, e.status]));
         pushQuestPanelData();
       });
       gameLog.on("raid-ended", () => {
         pushQuestPanelData();
         // TarkovMonitor needs a moment to push the raid's results to
         // TarkovTracker; then pull them so tooltips and the panel update
-        // without waiting for the 15-minute timer
-        setTimeout(async () => {
-          const current = getUserConfigData();
-          await items.refreshTrackerProgress(
-            getGameMode(current),
-            current.tarkovTrackerApiToken
-          );
-          pushQuestPanelData();
-        }, 20 * 1000);
+        // without waiting for the idle poll. Through the shared gate, so it
+        // cannot race another pull or double up with one.
+        setTimeout(() => void pullTrackerProgress("raid ended", true), 20 * 1000);
       });
       gameLog.start();
       void items.setQuestEvents(gameLog.getQuestEvents());
@@ -516,19 +659,46 @@ try {
 
     // One OCR pass over the game's Tasks screen; merges task progress,
     // objective counts and operational tasks into the panel
-    async function scanTasksScreenOnce(): Promise<number> {
+    // Screen-pixel rectangles of our own overlay windows, so the toast OCR
+    // never reads the quest panel / map text as a notification
+    function overlayRects(): { x: number; y: number; width: number; height: number }[] {
+      const scale = screen.getPrimaryDisplay().scaleFactor;
+      const rects = [];
+      for (const win of [questPanel, mapWindow]) {
+        if (!win || win.isDestroyed() || !win.isVisible()) continue;
+        const b = win.getBounds();
+        rects.push({
+          x: b.x * scale,
+          y: b.y * scale,
+          width: b.width * scale,
+          height: b.height * scale,
+        });
+      }
+      return rects;
+    }
+
+    // force = read the screen even if it looks unchanged (first pass of a
+    // session: the helper's baseline may be from a previous session)
+    async function scanTasksScreenOnce(force = false): Promise<number> {
       if (!ocr || scanInProgress) return 0;
       scanInProgress = true;
       try {
         const config = getUserConfigData();
         const mode = getGameMode(config);
         const [tsv, catalog, maps] = await Promise.all([
-          ocr.requestScreenScan(undefined, undefined, [], true),
+          // Our own panel and map are blacked out: without this the scanner
+          // reads its own output back as if it were the game (a quest row it
+          // drew keeps re-confirming whatever it already believed)
+          ocr.requestScreenScan(undefined, undefined, overlayRects(), !force),
           items.taskData.loadTaskCatalog(mode),
           items.taskData.loadMaps(mode),
         ]);
-        if (tsv.trim() === "UNCHANGED") return -1;
         if (!taskScan) taskScan = new TaskScan(app.getPath("userData"));
+        if (tsv.trim() === "UNCHANGED") {
+          // Same screen as the last read: what it showed is confirmed
+          taskScan.confirmLastRead();
+          return -1;
+        }
         const passStartedAt = Date.now();
         const activeIds = [...(gameLog?.getQuestEvents() ?? new Map()).entries()]
           .filter(([, e]) => e.status === "started")
@@ -539,20 +709,26 @@ try {
           maps.map((m) => m.name),
           activeIds
         );
-        // Hand what this pass read to TarkovTracker (completions and
-        // counters only - see TrackerSync)
+        // Hand what this pass read to TarkovTracker: counters as soon as
+        // they climb (a wrong one is corrected by the next read), but a
+        // completion only once two separate reads have seen the tick -
+        // TrackerSync never un-completes, so that write is permanent.
         const sync = getTrackerSync();
-        for (const state of taskScan.statesSince(passStartedAt)) {
+        for (const state of canPushToTracker() ? taskScan.statesSince(passStartedAt) : []) {
           if (!state.objectiveId) continue;
           const known = trackerObjective(state.objectiveId);
+          const corroborated = state.done && state.doneSeen >= OCR_WRITE_CONFIRMATIONS;
           sync.queueObjective(state.objectiveId, {
-            state: state.done && !known?.complete ? "completed" : undefined,
+            state: corroborated && !known?.complete ? "completed" : undefined,
             count:
               typeof state.count === "number" && state.count > (known?.count ?? 0)
                 ? state.count
                 : undefined,
           });
         }
+        scanSessionUpdates += result.updates;
+        scanSessionNewTasks += result.newTasks;
+        noteChanges(result.changes, "scan");
         pushQuestPanelData();
         return result.tasks + result.objectives;
       } catch (error) {
@@ -572,8 +748,22 @@ try {
     // or this much time has passed
     const SCAN_SESSION_MS = 3 * 60 * 1000;
     let scanSessionPasses = 0;
-    const SCAN_SESSION_INTERVAL_MS = 400;
-    const SCAN_SESSION_MAX_EMPTY_PASSES = 12;
+    // The wait *between* passes. A pass that read something means you are
+    // navigating, so the next one starts straight away; otherwise we idle at
+    // the slower rate, where each check is only the ~70ms "has the screen
+    // changed" test. (Shortening the idle rate would not help: a pass that
+    // finds a changed screen spends ~1.5s in OCR, which dwarfs the wait.)
+    const SCAN_SESSION_BUSY_MS = 60;
+    const SCAN_SESSION_IDLE_MS = 400;
+    // Stop after this many reads that found no task rows at all - so a
+    // hotkey press on a raid screen (every frame different, every pass a
+    // full OCR) gives up quickly - but never before the player has had time
+    // to reach the Tasks screen
+    const SCAN_SESSION_MAX_EMPTY_PASSES = 5;
+    // Reads that must agree before an OCR-derived completion is written to
+    // TarkovTracker (the panel shows it after the first)
+    const OCR_WRITE_CONFIRMATIONS = 2;
+    const SCAN_SESSION_GRACE_MS = 40 * 1000;
     // The scan hotkey / panel chip toggles the session
     function toggleScanSession() {
       if (scanSessionTimer) stopScanSession();
@@ -584,11 +774,18 @@ try {
       if (scanSessionTimer) clearTimeout(scanSessionTimer);
       scanSessionTimer = null;
       scanSessionUntil = 0;
-      log.info("Tasks screen scan session stopped");
+      scanSessionEndedAt = Date.now();
+      endScanSession();
+      log.info(`Tasks screen scan session stopped: ${scanSessionUpdates} update(s)`);
       sendScanStatus(false);
       pushQuestPanelData();
     }
 
+    let scanSessionUpdates = 0;
+    // The map was up when a scan started, so it goes back up afterwards
+    let mapHiddenForScan = false;
+    let scanSessionNewTasks = 0;
+    let scanSessionEndedAt: number | null = null;
     function sendScanStatus(active: boolean) {
       questPanel?.sendScanStatus({
         active,
@@ -597,25 +794,56 @@ try {
           : 0,
         passes: scanSessionPasses,
         tasks: taskScan ? taskScan.getLastScan().count : 0,
+        updates: scanSessionUpdates,
+        newTasks: scanSessionNewTasks,
+        endedAt: scanSessionEndedAt,
       });
+    }
+
+    function endScanSession() {
+      restoreMapAfterScan();
+      getTrackerSync().release();
+    }
+
+    function restoreMapAfterScan() {
+      if (!mapHiddenForScan) return;
+      mapHiddenForScan = false;
+      if (mapWindow && !mapWindow.isDestroyed()) mapWindow.showMap();
     }
 
     function startScanSession() {
       scanSessionUntil = Date.now() + SCAN_SESSION_MS;
       scanSessionEmptyRuns = 0;
       // The panel is where the session's progress shows, so make sure it
-      // is on screen: the key press is acknowledged the moment it happens
+      // is on screen: the key press is acknowledged the moment it happens.
+      // It is a thin strip at the right edge, clear of the task list.
       if (questPanel && !questPanel.isPanelVisible()) questPanel.showPanel();
+      // The map is not: it can cover most of the screen, and our own windows
+      // are masked out of the scan, so leaving it up would black out the
+      // task list we are trying to read. Put it away and bring it back after.
+      if (mapWindow?.isMapVisible()) {
+        mapHiddenForScan = true;
+        mapWindow.hideMap();
+        log.info("Map hidden while the Tasks screen is being read");
+      }
       if (scanSessionTimer) {
         sendScanStatus(true);
         return; // already running - just extended
       }
+      // Everything this session learns goes to TarkovTracker in one round
+      // when it finishes, rather than a trickle of writes while you scroll
+      getTrackerSync().hold();
       scanSessionPasses = 0;
+      scanSessionUpdates = 0;
+      scanSessionNewTasks = 0;
+      scanSessionEndedAt = null;
       log.info("Tasks screen scan session started");
       sendScanStatus(true);
       let lastPassFound = 1;
+      const startedAt = Date.now();
+      let everFound = false;
       const tick = async () => {
-        const found = await scanTasksScreenOnce();
+        const found = await scanTasksScreenOnce(scanSessionPasses === 0);
         // -1 = screen unchanged: nothing new to learn; it only counts as an
         // empty pass when the last real read was empty too (the player has
         // left the Tasks screen and is sitting still somewhere else)
@@ -623,47 +851,44 @@ try {
           scanSessionPasses++;
           lastPassFound = found;
           scanSessionEmptyRuns = found > 0 ? 0 : scanSessionEmptyRuns + 1;
+          if (found > 0) everFound = true;
         } else if (lastPassFound === 0) {
           scanSessionEmptyRuns++;
         }
+        // Give up early only once the player has had a chance to open the
+        // Tasks screen, or as soon as it goes quiet after finding something
+        const impatient = everFound || Date.now() - startedAt >= SCAN_SESSION_GRACE_MS;
         const done =
           Date.now() >= scanSessionUntil ||
-          scanSessionEmptyRuns >= SCAN_SESSION_MAX_EMPTY_PASSES;
+          (impatient && scanSessionEmptyRuns >= SCAN_SESSION_MAX_EMPTY_PASSES);
         if (done) {
           scanSessionTimer = null;
-          log.info("Tasks screen scan session ended");
+          scanSessionEndedAt = Date.now();
+          endScanSession();
+          log.info(`Tasks screen scan session ended: ${scanSessionUpdates} update(s)`);
           sendScanStatus(false);
           pushQuestPanelData();
           return;
         }
         sendScanStatus(true);
-        scanSessionTimer = setTimeout(tick, SCAN_SESSION_INTERVAL_MS);
+        // found > 0 = rows were read this pass; -1 = screen unchanged
+        scanSessionTimer = setTimeout(
+          tick,
+          found > 0 ? SCAN_SESSION_BUSY_MS : SCAN_SESSION_IDLE_MS
+        );
       };
       scanSessionTimer = setTimeout(tick, 0);
     }
 
-    // Screen-pixel rectangles of our own overlay windows, so the toast OCR
-    // never reads the quest panel / map text as a notification
-    function overlayRects(): { x: number; y: number; width: number; height: number }[] {
-      const scale = screen.getPrimaryDisplay().scaleFactor;
-      const rects = [];
-      for (const win of [questPanel, mapWindow]) {
-        if (!win || win.isDestroyed() || !win.isVisible()) continue;
-        const b = win.getBounds();
-        rects.push({
-          x: b.x * scale,
-          y: b.y * scale,
-          width: b.width * scale,
-          height: b.height * scale,
-        });
-      }
-      return rects;
-    }
 
     // In-raid notification toasts (bottom-right of the screen): read every
     // 2s while in a PMC raid; the helper keeps only the bright pixels of the
     // strip and skips OCR entirely while nothing bright is there
-    const TOAST_INTERVAL_MS = 2000;
+    // The game shows a notification for roughly 2.5s. Sampling faster than
+    // that guarantees at least one look while it is up, with room to spare
+    // for a slow frame - and a look is cheap (~60ms) because the helper
+    // throws away everything but the bright pixels before deciding to OCR.
+    const TOAST_INTERVAL_MS = 1500;
     async function watchToasts() {
       if (!ocr || !gameLog || !gameLog.state.inRaid || scanInProgress) return;
       if (gameLog.state.raidKind === "scav") return;
@@ -698,14 +923,26 @@ try {
         const knownNames = [...taskScan.getTasks().values()].map((t) => t.name);
         const events = taskScan.applyToastTsv(tsv, catalog, knownNames);
         if (events.length) {
+          noteChanges(
+            events.map((e) =>
+              e.kind === "ready"
+                ? `${e.name} is ready to hand in`
+                : e.kind === "failed"
+                  ? `${e.name} failed`
+                  : `${e.name}: subtask done`
+            ),
+            "raid"
+          );
           const sync = getTrackerSync();
-          for (const event of events) {
+          for (const event of canPushToTracker() ? events : []) {
             if (event.kind !== "ready" || !event.taskId) continue;
             // Only for a quest the logs confirm is active: a misread toast
             // must not complete objectives on the tracker
             if (gameLog?.getQuestEvents().get(event.taskId)?.status !== "started") continue;
             const task = catalog.find((t) => t.id === event.taskId);
-            for (const objective of task?.objectives ?? []) {
+            // "Ready" means the required objectives are done; optional ones
+            // may well not be
+            for (const objective of (task?.objectives ?? []).filter((o) => !o.optional)) {
               if (!trackerObjective(objective.id)?.complete) {
                 sync.queueObjective(objective.id, { state: "completed" });
               }
@@ -781,12 +1018,21 @@ try {
       });
       if (!mapWindow || mapWindow.isDestroyed()) {
         mapWindow = new MapWindow(config.mapWindowBounds);
+        mapWindow.onVisibilityChange = (visible) => {
+          if (visible) preflightOverlays("map opened");
+        };
       }
 
       // Ctrl+wheel (hooked in the OCR helper) scrolls the panel while open;
       // the map window closes and reopens together with the panel
       questPanel.onVisibilityChange = (visible) => {
         ocr?.setWheelHookEnabled(visible);
+        // Opening the panel is a good moment to check our own plumbing and
+        // catch up with the tracker
+        if (visible) {
+          preflightOverlays("quest panel opened");
+          if (!gameLog?.state.inRaid) void pullTrackerProgress("panel opened");
+        }
         if (!mapWindow || mapWindow.isDestroyed()) return;
         if (!visible) {
           mapOpenWithPanel = mapWindow.isMapVisible();
@@ -798,6 +1044,7 @@ try {
         }
       };
       registerMapHotkey(config.mapHotkey ?? DEFAULT_MAP_HOTKEY);
+      startTrackerPolling();
       if (ocr) {
         ocr.onWheel = (delta) => questPanel?.scrollBy(delta);
       }
@@ -1015,12 +1262,6 @@ try {
     registerHotkeys(hotkeyUserConfig);
 
     // The quest panel asks for mouse input only while the cursor hovers it
-    ipcMain.on(
-      IpcConstants.QuestPanelInteractive,
-      (_event, enabled: boolean) => {
-        questPanel?.setInteractive(enabled);
-      }
-    );
 
     // Dragging / resizing the quest panel; commit=true persists the result
     ipcMain.on(
@@ -1057,14 +1298,32 @@ try {
       }
     );
 
-    // Keep the overlay windows' hover detection alive (see forwardingCycle)
+    // Overlay windows are clickable exactly while the cursor is over them.
+    // Decided here from the cursor position rather than from the renderer's
+    // mouseenter / mouseleave, which Windows + Electron's click-through
+    // forwarding deliver unreliably (a missed leave left the panel either
+    // stuck clickable or stuck click-through with hover styles still
+    // lighting up). A press in progress keeps the window interactive so a
+    // drag can run past its edge; in a raid the game owns the cursor, so
+    // nothing is ever interactive.
+    const overlayUser32 = koffi.load("user32.dll");
+    const GetAsyncKeyState = overlayUser32.func("short GetAsyncKeyState(int vKey)");
+    const OVERLAY_HOVER_POLL_MS = 100;
     setInterval(() => {
       const overlays = [questPanel, mapWindow].filter(
-        (w): w is NonNullable<typeof w> => !!w && !w.isDestroyed()
+        (w): w is NonNullable<typeof w> => !!w && !w.isDestroyed() && w.isVisible()
       );
-      for (const w of overlays) w.forwardingCycle("drop");
-      for (const w of overlays) w.forwardingCycle("arm");
-    }, 3000);
+      if (overlays.length === 0) return;
+      const cursor = screen.getCursorScreenPoint();
+      const buttonDown = (GetAsyncKeyState(0x01) & 0x8000) !== 0;
+      const inRaid = !!gameLog?.state.inRaid;
+      for (const w of overlays) {
+        const b = w.getBounds();
+        const inside =
+          cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height;
+        w.setInteractive(!inRaid && (inside || (buttonDown && w.isInteractive())));
+      }
+    }, OVERLAY_HOVER_POLL_MS);
 
     // Quest panel buttons
     ipcMain.on(IpcConstants.QuestPanelToggleScan, () => toggleScanSession());
@@ -1090,9 +1349,6 @@ try {
     });
 
     // Map window
-    ipcMain.on(IpcConstants.MapWindowInteractive, (_event, enabled: boolean) => {
-      mapWindow?.setInteractive(enabled);
-    });
     ipcMain.on(IpcConstants.MapWindowClose, () => mapWindow?.hideMap());
     ipcMain.on(
       IpcConstants.MapWindowSetBounds,
@@ -1200,11 +1456,20 @@ try {
       (_event, userConfig: UserConfig) => {
         const previous = getUserConfigData();
         setUserConfigData(userConfig);
-        if (
-          (userConfig.tarkovTrackerApiToken ?? "") !== (previous.tarkovTrackerApiToken ?? "") ||
-          (userConfig.syncToTracker !== false) !== (previous.syncToTracker !== false)
-        ) {
-          getTrackerSync();
+        const tokenChanged =
+          (userConfig.tarkovTrackerApiToken ?? "") !== (previous.tarkovTrackerApiToken ?? "");
+        if (tokenChanged || (userConfig.syncToTracker !== false) !== (previous.syncToTracker !== false)) {
+          getTrackerSync().configure(
+            userConfig.tarkovTrackerApiToken ?? null,
+            userConfig.syncToTracker !== false
+          );
+        }
+        if (tokenChanged && items) {
+          // The "does the tracker already have this" checks must answer for
+          // the new account before anything is pushed to it. Through the
+          // same gate as the poll, so an in-flight pull for the old token
+          // cannot land last and win.
+          void pullTrackerProgress("token changed", true);
         }
 
         // Apply quest-panel settings live

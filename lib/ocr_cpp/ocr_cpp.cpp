@@ -480,10 +480,20 @@ static bool isTickColour(l_uint32 px) {
 	return r < 160 && g > 120 && b > 120 && (g - r) > 40 && (b - r) > 40;
 }
 
-// Append to every word line of a TSV page a 13th column: the number of
-// tick-coloured pixels in and just right of the word's box, so the caller
-// can tell a completed objective row ("... on Customs [tick]") from a
-// pending one. Other lines pass through unchanged.
+// The Tasks screen paints the band behind a completed objective a dark blue,
+// while an unfinished one stays neutral grey. That band is thousands of
+// pixels against the tick's few hundred, so it is the sturdier signal.
+static bool isDoneRowColour(l_uint32 px) {
+	l_int32 r = 0, g = 0, b = 0;
+	extractRGBValues(px, &r, &g, &b);
+	return b > 28 && b < 150 && (b - r) > 12 && (g - r) >= 0 && r < 110;
+}
+
+// Append to every word line of a TSV page two columns: the number of
+// tick-coloured pixels in and just right of the word's box, and the
+// percentage of the row band behind the word painted the "objective done"
+// blue. Together they tell a completed objective row from a pending one.
+// Other lines pass through unchanged.
 static std::string annotateTicks(const std::string& tsv, PIX* pix) {
 	if (!pix || pixGetDepth(pix) != 32) return tsv;
 	const l_int32 w = pixGetWidth(pix), h = pixGetHeight(pix);
@@ -521,7 +531,19 @@ static std::string annotateTicks(const std::string& tsv, PIX* pix) {
 						if (isTickColour(row[x])) ticks++;
 					}
 				}
+				// Background just above and below the glyphs, where no text
+				// can interfere: what colour is this row's band?
+				int blue = 0, band = 0;
+				for (const int y : { cols[7] - 5, cols[7] - 4, cols[7] + cols[9] + 3, cols[7] + cols[9] + 4 }) {
+					if (y < 0 || y >= h) continue;
+					const l_uint32* row = data + (size_t)y * wpl;
+					for (int x = (std::max)(0, cols[6]); x < (std::min)(w, cols[6] + cols[8]); x++) {
+						band++;
+						if (isDoneRowColour(row[x])) blue++;
+					}
+				}
 				line += "\t" + std::to_string(ticks);
+				line += "\t" + std::to_string(band > 0 ? (blue * 100) / band : 0);
 			}
 		}
 		out += line;
@@ -558,36 +580,50 @@ static std::string ocrToast(tesseract::TessBaseAPI& tess, PIX* pix, const std::s
 	return result;
 }
 
-// Coarse sample of a capture (every 7th row, every 11th column). A repeated
-// full-screen scan compares it with the previous one and calls the screen
-// unchanged unless more than 0.5% of the samples moved by a visible amount,
-// so a ticking clock or a blinking cursor does not trigger another OCR.
-static std::vector<l_uint32> g_lastScreenSamples;
+// Coarse sample of a capture (every 7th row, every 11th column), taken from
+// the raw BGRA capture before any conversion. A "SCAN IFCHANGED" compares it
+// with the sample of the screen that was last actually OCR'd and calls the
+// screen unchanged unless more than 0.5% of the samples moved by a visible
+// amount - so a ticking clock or a blinking cursor does not trigger another
+// OCR, but a single new tick mark keeps accumulating until the frame is
+// re-read. A plain "SCAN" always reads and resets the baseline.
+static std::vector<l_uint32> g_lastOcrSamples;
+static std::vector<l_uint32> g_sampleScratch;
 
-static bool screenUnchanged(PIX* pix) {
-	if (!pix || pixGetDepth(pix) != 32) return false;
-	const l_int32 w = pixGetWidth(pix), h = pixGetHeight(pix), wpl = pixGetWpl(pix);
-	const l_uint32* data = pixGetData(pix);
-	std::vector<l_uint32> samples;
-	samples.reserve((size_t)(h / 7 + 1) * (size_t)(w / 11 + 1));
-	for (l_int32 y = 0; y < h; y += 7) {
-		const l_uint32* row = data + (size_t)y * wpl;
-		for (l_int32 x = 0; x < w; x += 11) samples.push_back(row[x]);
-	}
-	bool same = false;
-	if (g_lastScreenSamples.size() == samples.size()) {
-		const size_t allowed = samples.size() / 200;
-		size_t differing = 0;
-		for (size_t i = 0; i < samples.size(); i++) {
-			l_int32 r1, g1, b1, r2, g2, b2;
-			extractRGBValues(samples[i], &r1, &g1, &b1);
-			extractRGBValues(g_lastScreenSamples[i], &r2, &g2, &b2);
-			if (abs(r1 - r2) + abs(g1 - g2) + abs(b1 - b2) > 48 && ++differing > allowed) break;
+static void sampleScreen(const uint8_t* pixels, int w, int h, int stride, std::vector<l_uint32>& out, const std::vector<ScreenRect>& exclude) {
+	out.clear();
+	out.reserve((size_t)(h / 7 + 1) * (size_t)(w / 11 + 1));
+	for (int y = 0; y < h; y += 7) {
+		const uint8_t* row = pixels + (size_t)y * stride;
+		for (int x = 0; x < w; x += 11) {
+			// Our own overlay windows are excluded: their text changes on its
+			// own (countdowns, live counters) and would make every capture
+			// look like a changed screen
+			bool skip = false;
+			for (const ScreenRect& r : exclude) {
+				if (x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) { skip = true; break; }
+			}
+			if (skip) {
+				out.push_back(0);
+				continue;
+			}
+			const uint8_t* px = row + (size_t)x * 4; // BGRA
+			out.push_back(((l_uint32)px[2] << 16) | ((l_uint32)px[1] << 8) | px[0]);
 		}
-		same = differing <= allowed;
 	}
-	g_lastScreenSamples.swap(samples);
-	return same;
+}
+
+static bool samplesUnchanged(const std::vector<l_uint32>& a, const std::vector<l_uint32>& b) {
+	if (a.empty() || a.size() != b.size()) return false;
+	const size_t allowed = a.size() / 200;
+	size_t differing = 0;
+	for (size_t i = 0; i < a.size(); i++) {
+		const int dr = (int)((a[i] >> 16) & 0xff) - (int)((b[i] >> 16) & 0xff);
+		const int dg = (int)((a[i] >> 8) & 0xff) - (int)((b[i] >> 8) & 0xff);
+		const int db = (int)(a[i] & 0xff) - (int)(b[i] & 0xff);
+		if (abs(dr) + abs(dg) + abs(db) > 48 && ++differing > allowed) return false;
+	}
+	return true;
 }
 static const char* UNCHANGED_PAGE = "UNCHANGED";
 
@@ -612,6 +648,13 @@ static std::string scanScreenRegion(tesseract::TessBaseAPI& tess, int x, int y, 
 	if (w <= 10 || h <= 10) return result;
 
 	Image img(cachedDesktopDC, x, y, w, h);
+	if (fullScreen) {
+		// Decide "unchanged" on the raw capture, before paying for the
+		// RGB conversion and the OCR
+		sampleScreen(img.GetPixels(), img.GetWidth(), img.GetHeight(), img.GetBytesPerScanLine(), g_sampleScratch, exclude);
+		if (onlyIfChanged && samplesUnchanged(g_sampleScratch, g_lastOcrSamples)) return UNCHANGED_PAGE;
+		g_lastOcrSamples.swap(g_sampleScratch);
+	}
 	PIX* pix = pixFromImage(img);
 	if (!pix) return result;
 
@@ -630,14 +673,6 @@ static std::string scanScreenRegion(tesseract::TessBaseAPI& tess, int x, int y, 
 	}
 
 	if (fullScreen) {
-		// "SCAN IFCHANGED": skip the (expensive) OCR while the screen is the
-		// same as last time, so a running scan session costs nothing while
-		// the player just reads
-		const bool unchanged = screenUnchanged(pix);
-		if (onlyIfChanged && unchanged) {
-			pixDestroy(&pix);
-			return UNCHANGED_PAGE;
-		}
 		result = annotateTicks(ocrPage(tess, pix, 1.0f, PAGE_OCR_DEADLINE_MS), pix);
 	}
 	else {
@@ -809,7 +844,7 @@ int main(int argc, char* argv[])
 			else if (command == "WHEELHOOK OFF") {
 				g_wheelHookEnabled.store(false);
 			}
-			else if (command == "SCAN" || command == "SCAN IFCHANGED" || command.rfind("SCANREGION ", 0) == 0 || command.rfind("SCANFILE ", 0) == 0 || command.rfind("SCANTOAST ", 0) == 0) {
+			else if (command == "SCAN" || command.rfind("SCAN ", 0) == 0 || command.rfind("SCANREGION ", 0) == 0 || command.rfind("SCANFILE ", 0) == 0 || command.rfind("SCANTOAST ", 0) == 0) {
 				std::string page;
 				if (command.rfind("SCANTOAST ", 0) == 0) {
 					page = scanImageFile(tess, command.substr(10), 1.0f, true);
@@ -822,23 +857,24 @@ int main(int argc, char* argv[])
 					page = scanImageFile(tess, pathBuf, scale);
 				}
 				else {
+					// "SCAN [IFCHANGED] | SCANREGION x y w h" followed, for
+					// either shape, by "[EXCLUDE x y w h]... [DUMP <path>]"
 					int rx = 0, ry = 0, rw = 0, rh = 0;
 					std::string dumpPath;
 					std::vector<ScreenRect> exclude;
-					const bool onlyIfChanged = command == "SCAN IFCHANGED";
-					if (command != "SCAN" && !onlyIfChanged) {
-						// "SCANREGION x y w h [EXCLUDE x y w h]... [DUMP <path>]"
+					const bool onlyIfChanged = command.find(" IFCHANGED") != std::string::npos;
+					if (command.rfind("SCANREGION ", 0) == 0) {
 						sscanf_s(command.c_str() + 11, "%d %d %d %d", &rx, &ry, &rw, &rh);
-						size_t dumpAt = command.find(" DUMP ");
-						if (dumpAt != std::string::npos) dumpPath = command.substr(dumpAt + 6);
-						size_t at = command.find(" EXCLUDE ");
-						while (at != std::string::npos && (dumpAt == std::string::npos || at < dumpAt)) {
-							ScreenRect r = { 0, 0, 0, 0 };
-							if (sscanf_s(command.c_str() + at + 9, "%d %d %d %d", &r.x, &r.y, &r.w, &r.h) == 4 && r.w > 0 && r.h > 0) {
-								exclude.push_back(r);
-							}
-							at = command.find(" EXCLUDE ", at + 9);
+					}
+					const size_t dumpAt = command.find(" DUMP ");
+					if (dumpAt != std::string::npos) dumpPath = command.substr(dumpAt + 6);
+					size_t at = command.find(" EXCLUDE ");
+					while (at != std::string::npos && (dumpAt == std::string::npos || at < dumpAt)) {
+						ScreenRect r = { 0, 0, 0, 0 };
+						if (sscanf_s(command.c_str() + at + 9, "%d %d %d %d", &r.x, &r.y, &r.w, &r.h) == 4 && r.w > 0 && r.h > 0) {
+							exclude.push_back(r);
 						}
+						at = command.find(" EXCLUDE ", at + 9);
 					}
 					page = scanScreenRegion(tess, rx, ry, rw, rh, dumpPath, exclude, onlyIfChanged);
 				}
