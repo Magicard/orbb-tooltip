@@ -22,27 +22,28 @@
 - **Quests and hideout upgrades that need it**, with counts
 - **Your progress** *(optional)* — link TarkovTracker and requirements you can do **right now show green**, ones locked behind later quests are dimmed "(later)", and ones you've already finished disappear
 
-**Quest panel.** Press **`'`** and a Questie-style panel slides in from the right: the quests you've accepted with objectives on the map you're on, the ones you can do anywhere, and your rotating Operational tasks. Objectives still to do are listed white with their counters ("3/5"); a quest whose work is all done but that you haven't handed in yet collapses to a green title with a **DONE** badge, and **READY** appears when the game itself says so.
+**Quest panel.** Press **`'`** and a Questie-style panel slides in from the right: the quests you've accepted with objectives on the map you're on, and the ones you can do anywhere. Objectives still to do are listed white with their counters ("3/5"); a quest whose work is all done but that you haven't handed in yet collapses to a green title with a **DONE** badge, and **READY** appears when the game itself says so.
 
-- **Click** a quest to collapse it, **middle-click** it to open its wiki page, **drag the grip** on its left edge to reorder the list — your order and which quests are collapsed are remembered between sessions.
-- **✓ DONE** in the section header shows the finished objectives too, dimmed, so you can see what you've already knocked out. Each section header (the map name, ANYWHERE, OPERATIONAL) sticks to the top as you scroll and carries its own toggle.
+- **Click** a quest to collapse it, **press and drag** it to reorder the list, **middle-click** it to open its wiki page — your order and which quests are collapsed are remembered between sessions.
+- **✓ DONE** in the section header shows the finished objectives too, dimmed and still in the order the game lists them, so you can see what you've already knocked out. The section header (the map name, or ANYWHERE) sticks to the top as you scroll and carries the toggle with it.
+- **Daily and weekly tasks sit in the same lists**, on their own map or under Anywhere, with their steps and a live countdown to when they rotate out. No catalog knows them, so everything shown is read off your screen — scan a trader's task list or the OPERATIONAL tab to pick them up.
 - Click the map name to browse any map's quests, drag the top grip to move the panel, the bottom-left corner to resize it, and the slider (top-right) to set opacity.
 - **Ctrl + wheel scrolls it from anywhere**, even mid-raid while the game owns your cursor; in menus just hover it and scroll normally.
 - Under the list, **what changed lately** — each line marked by where it came from: ◎ read off the Tasks screen, ● from the game's log, ▸ from an in-raid notification, ↺ from TarkovTracker.
 
 <div align="center"><img src="docs/images/quest-panel.png" alt="Quest panel on Customs listing active quests with objectives on this map" width="360"></div>
 
-**Map window.** The **Map** button (or **`[`**) opens a floating, zoomable map of where you are — wheel to zoom, drag to pan, double-click to fit, move and resize it as you like, and it shares the panel's opacity and opens and closes with it. Maps are plain images you drop in the `maps` folder ([maps/README.md](maps/README.md) lists the names); Customs, Factory, Woods, Shoreline and Interchange are included.
+**Map window.** The **Map** button (or **`[`**) opens a floating, zoomable map of where you are — wheel to zoom, drag to pan, double-click to fit, move and resize it as you like, and it shares the panel's opacity and opens and closes with it. Maps are plain images you drop in the app's `resources\maps` folder ([maps/README.md](maps/README.md) lists the file names it looks for); Customs, Factory, Woods, Shoreline and Interchange are included.
 
 **Where your progress comes from** — three layers, merged:
 
 1. **The game's own logs.** The same files TarkovMonitor reads. They say which quests you've accepted, handed in or failed, which map you loaded into and when the raid ended. Instant and exact.
-2. **The Tasks screen scanner.** Press **`]`** (or click **SCANNER** at the top of the panel) on the game's Tasks screen or a trader's task list and the overlay reads it: which tasks are active, their percent, and — for the task you have open — each objective's counter and whether it carries the game's ✓. Scroll and click through your tasks; it keeps reading until you turn it off or leave the screen.
+2. **The Tasks screen scanner.** Press **`]`** (or click **SCANNER** at the top of the panel) on the game's Tasks screen or a trader's task list and the overlay reads it: which tasks are active, their percent, the time left on a daily, and — for the task you have open — each objective's counter and whether it carries the game's ✓. Scroll and click through your tasks; it keeps reading until you turn it off or leave the screen.
 3. **In-raid notifications.** The "Subtask completed" / "Task … is ready to be completed" toasts in the bottom-right corner are read as they appear.
 
 4. **TarkovTracker itself.** Out of raid it's polled every few minutes and whenever you open the panel, so anything TarkovMonitor (or you, on another device) marked there shows up here.
 
-Everything learned is kept locally and, if you link TarkovTracker, **pushed to your tracker** too, so it stays the one source of truth across devices. Nothing is ever marked *un*-done from a misread.
+Everything learned is kept locally, and whatever your tracker can hold — objective counters and completions, hand-ins, failures — is **pushed to TarkovTracker** too, so it stays the one source of truth across devices. Nothing is ever marked *un*-done from a misread. The rest stays here: a task's overall percent and your daily tasks have nowhere to go on the tracker, so the overlay keeps them itself.
 
 **Search log.** The main window lists everything you've hovered, newest first, with its market and trader value and a running **market total** and **trader total** — handy for deciding what's worth dragging out of a raid.
 
@@ -131,7 +132,7 @@ Counters like "3/5" and ticks inside a quest aren't in the logs — they're read
 | **`]`** | Start / stop reading the game's Tasks screen (changeable) |
 | **Ctrl + wheel** | Scroll the quest panel from anywhere while it's open |
 | **Middle-click a quest** | Open its page on the wiki |
-| **Drag a quest's left grip** | Reorder the list (remembered) |
+| **Press and drag a quest** | Reorder the list (remembered) |
 | **F12** | Developer tools |
 
 Each hotkey can be switched off in settings if it clashes with something.
@@ -147,7 +148,10 @@ Borderless mode (step 2), tooltips enabled (step 3), calibration done (step 5) �
 The scanner finds the game's tooltip by its border colour. If BSG changes the UI, adjust the RGB border colour in settings (defaults: 82 / 89 / 90). Unmatched reads are written to the log file — find it via `%APPDATA%\tarkov-price-tooltip\logs\main.log` and open an issue with the line.
 
 **The panel says a quest is on a map it isn't, or lists one I don't have.**
-The panel shows what the game's logs say you've accepted. If you've never played with logging on this PC, scan the Tasks screen once and the active list fills in from that instead. Rows the scanner can't match to any known quest are shown under *Operational* only if they look like real names; if junk ever gets through, a later scan of the same screen replaces it.
+The panel shows what the game's logs say you've accepted. If you've never played with logging on this PC, scan the Tasks screen once and the active list fills in from that instead. A row the scanner can't match to any known quest is treated as a daily and only kept when the game laid it out as a real task row — a location, a status and a progress bar, or a countdown; anything looser has to be read the same way twice. If junk ever does get through, a later scan of the same screen replaces it.
+
+**A daily shows no steps, no percent or no timer.**
+Only what is on the screen can be read. The list view gives a daily its name, map and countdown; its steps only exist once you click it and its Objective(s) section is showing. Scan again with the task open.
 
 **A finished objective stays white.**
 Open the quest on the Tasks screen with the scanner on so it can see the ✓. The tick is detected by colour; if your game uses an unusual UI colour scheme, tell us.
@@ -178,9 +182,13 @@ No. Measured while the game runs: about **2% of one CPU core** in a raid and ~50
 2. The Electron main process matches that name against a fuzzy index of all ~5,300 items and looks up prices, quest and hideout requirements (from `json.tarkov.dev`) and your TarkovTracker progress.
 3. A transparent always-on-top window draws the tooltip beside your cursor; two more draw the quest panel and the map.
 
-**The Tasks-screen scanner** OCRs the whole screen — with ORBB's own windows blacked out first, so it can never read its own output back — rebuilds rows from word positions and picks out task rows (name · map · status · percent, or just name · status on a trader's list), and the open task's objective rows: the text, "3/5" counters, the tick-coloured pixels after the text, and whether the game painted that row's band the "done" blue (the sturdier of the two signals). Names are matched to the quest catalog tolerating the stray letters OCR makes of the icons; the objective rows are assigned to whichever active task they fit best. Only what's on screen can be read, so scroll and click through.
+**The Tasks-screen scanner** OCRs the whole screen — with ORBB's own windows blacked out first, so it can never read its own output back — and rebuilds the game's rows from word positions. One line of pixels is not one row of the UI: a trader's page draws their task list down the left and the open task down the right, so a line crosses both, and a row of the Tasks screen is tall enough that its name, its status and a daily's countdown each land on a different line. So the words are reshaped first — panes split apart after a status word, the countdown lifted out of the row it belongs to, and the stacked cells put back together, using the game's own column header to tell how wide one row is.
 
-**Progress flow:** game logs → accepted / handed in / failed; Tasks screen → counters, ticks, percent; in-raid toasts → subtask done / ready to hand in. All of it is merged in the panel and (if enabled) pushed to TarkovTracker as completions and counters only — it never marks anything *un*-done on the tracker, so a missed read can't undo real progress. Writes are sent only when something is new and batched, because the tracker has a daily write quota.
+From there it picks out task rows (name · map · status · percent, or just name · status on a trader's list) and the open task's objective rows — the text, "3/5" counters, the tick-coloured pixels after the text, and whether the game painted that row's band the "done" blue (the sturdier of the two signals). Names are matched to the quest catalog tolerating the stray letters OCR makes of the icons. A task's steps are taken only from between the game's own Objective(s) and Rewards headings, so a trader's chatter never ends up in the list, and a daily takes its trader from the identified tasks around it — both of the game's lists are grouped by trader, which is the same thing its portrait column is telling you.
+
+Only what's on screen can be read, so scroll and click through.
+
+**Progress flow:** game logs → accepted / handed in / failed; Tasks screen → counters, ticks, percent, daily timers; in-raid toasts → subtask done / ready to hand in. All of it is merged in the panel and, if enabled, pushed to TarkovTracker as completions and counters only — a completion needs the tick in two separate reads, a counter has to beat what the tracker already holds, and nothing is ever marked *un*-done, so a missed read cannot undo real progress. Writes are batched to the end of a scan rather than sent per pass, because the tracker has a daily write quota.
 
 ---
 
@@ -192,6 +200,7 @@ Requires Node.js 18+ on Windows.
 npm install
 npm start          # run in development
 npm run package    # build out/ORBBToolTip-win32-x64/
+npm run make       # build the release zip and installer into out/make/
 ```
 
 Press F6 in-app afterwards to calibrate (repackaging resets the calibration file).
