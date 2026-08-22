@@ -128,6 +128,7 @@ Counters like "3/5" and ticks inside a quest aren't in the logs — they're read
 | **F4** | Add one to the last scanned item's count |
 | **F6** | Screen calibration |
 | **`'`** | Slide the quest panel in / out (changeable in settings) |
+| **Ctrl + `'`** | Put the overlays back in order if hover or Ctrl+wheel stops responding |
 | **`[`** | Show / hide the map window (changeable) |
 | **`]`** | Start / stop reading the game's Tasks screen (changeable) |
 | **Ctrl + wheel** | Scroll the quest panel from anywhere while it's open |

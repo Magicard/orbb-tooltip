@@ -47,6 +47,11 @@ export type ScannedTask = {
 
 // Passes an unknown name must be read in before it is shown
 const UNKNOWN_CONFIRMATIONS = 2;
+// How long a row thrown away by hand stays thrown away - about one rotation
+const DISMISSAL_MS = 24 * 3600 * 1000;
+// A session has to have read something this many times before one sighting of
+// anything else counts as suspiciously few
+const SESSION_READS_TO_JUDGE = 4;
 // Two passes closer together than this are treated as the same reading
 const CONFIRMATION_GAP_MS = 900;
 // One bar for believing a row the catalog cannot explain, used to show it, to
@@ -71,8 +76,9 @@ function isBelieved(task: {
 // the app's own overlay out of the scan; v3 is when that masking actually
 // reached the helper (the exclusion rects were being dropped on the way).
 // v4 drops the steps v3 gave a rotating task, which were whatever lines sat
-// under it rather than the task's own.
-const SCAN_STORE_VERSION = 4;
+// under it rather than the task's own; v5 drops the rotating tasks themselves,
+// which before it could be minted from a misread on any screen.
+const SCAN_STORE_VERSION = 5;
 
 export type ScannedObjective = {
   key: string; // normalized objective text
@@ -155,17 +161,20 @@ const TRADER_ROW_DEBRIS = 3;
 const ANY_LOCATION = "Any location";
 const PERCENT_PATTERN = /^(\d{1,3})\s*%$/;
 const COUNT_PATTERN = /^(\d{1,4})\s*\/\s*(\d{1,4})$/;
-// How long an Operational task has left: "23:42:12", "1 day(s) 02:05:17", or
+// The clock half of an Operational task's countdown: "23:42:12", "02:05", or
 // the same thing with the colons lost in the read ("004857")
-const COUNTDOWN_PATTERN =
-  /^(?:(\d+)\s*days?\(?s?\)?\.?\s+)?(?:(\d{1,2}):(\d{2})(?::(\d{2}))?|(\d{2})(\d{2})(\d{2}))$/i;
+const CLOCK_PATTERN = /^(?:(\d{1,2}):(\d{2})(?::(\d{2}))?|(\d{2})(\d{2})(\d{2}))$/;
+// The "1 day(s)" in front of it, and the pieces OCR breaks that into
+const DAY_WORD = /^days?\(?s?\)?\.?$|^\(?s\)?$/i;
+// How far in front of the clock that prefix can start
+const DAY_PREFIX_WORDS = 3;
 // Longer than the game ever counts down for, so anything above it is a misread
 const MAX_COUNTDOWN_MS = 8 * 24 * 3600 * 1000;
 
-function countdownMs(text: string): number | null {
-  const m = COUNTDOWN_PATTERN.exec(text.trim());
+function clockMs(text: string): number | null {
+  const m = CLOCK_PATTERN.exec(text.trim());
   if (!m) return null;
-  const [, days, a, b, c, hh, mm, ss] = m;
+  const [, a, b, c, hh, mm, ss] = m;
   // Two colon-separated fields are minutes:seconds, three are hours:minutes:
   // seconds, and a run of six digits is always all three
   const hours = Number(hh ?? (c ? a : "0"));
@@ -174,9 +183,7 @@ function countdownMs(text: string): number | null {
   // Out-of-range fields mean this is some other number that happens to be six
   // digits long, not a clock
   if (minutes > 59 || seconds > 59 || hours > 23) return null;
-  const total = ((Number(days ?? 0) * 24 + hours) * 60 + minutes) * 60 + seconds;
-  const ms = total * 1000;
-  return ms > 0 && ms <= MAX_COUNTDOWN_MS ? ms : null;
+  return ((hours * 60 + minutes) * 60 + seconds) * 1000;
 }
 
 // Objective text is a sentence; a change line only has room for the start
@@ -199,6 +206,12 @@ export default class TaskScan {
   private file: string | null = null;
   private lastScanAt = 0;
   private lastScanCount = 0;
+  // Rows the player threw away by hand, and when that stops applying
+  private dismissed = new Map<string, number>();
+  // How many passes of the running scan session read each task, and which
+  // tasks already existed when it started (see endSession)
+  private sessionReads = new Map<string, number>();
+  private sessionKnown: Set<string> | null = null;
   // Latest in-raid toast state per task (keyed by task id, or normalized
   // name for tasks no catalog knows)
   private toasts = new Map<string, ToastState>();
@@ -219,6 +232,49 @@ export default class TaskScan {
   // Operational ones - excluding readings we do not trust yet
   getUnknownTasks(): ScannedTask[] {
     return [...this.tasks.values()].filter((t) => !t.taskId && isBelieved(t));
+  }
+
+  // Throw a reading away because the player says it is not a task. It has to
+  // be remembered as thrown away, or the next pass over the same screen reads
+  // it straight back in - but only for a day, because a rotating task can
+  // genuinely come back under the name of one that was garbage yesterday.
+  forget(key: string): boolean {
+    const task = this.tasks.get(key);
+    if (!task) return false;
+    this.tasks.delete(key);
+    this.dismissed.set(key, Date.now() + DISMISSAL_MS);
+    log.info(`Tasks screen scan: "${task.name}" thrown away by hand`);
+    this.save();
+    return true;
+  }
+
+  // A scan session is about to start reading the screen over and over
+  beginSession(): void {
+    this.sessionReads.clear();
+    this.sessionKnown = new Set(this.tasks.keys());
+  }
+
+  // The session is over, so every reading it was going to make, it has made.
+  // A rotating task the whole session saw exactly once, while reading plenty
+  // else over and over, is a misread of something that was there all along -
+  // the real rows come back pass after pass. Tasks that predate the session
+  // are left alone: this only judges what the session itself brought in.
+  endSession(): void {
+    const known = this.sessionKnown;
+    this.sessionKnown = null;
+    if (!known) return;
+    const busiest = Math.max(0, ...this.sessionReads.values());
+    if (busiest < SESSION_READS_TO_JUDGE) return;
+    let dropped = false;
+    for (const [key, reads] of this.sessionReads) {
+      const task = this.tasks.get(key);
+      if (!task || task.taskId || reads > 1 || known.has(key)) continue;
+      log.info(`Tasks screen scan: "${task.name}" was read once in ${busiest} passes - dropping it`);
+      this.tasks.delete(key);
+      dropped = true;
+    }
+    this.sessionReads.clear();
+    if (dropped) this.save();
   }
 
   getLastScan(): { at: number; count: number } {
@@ -341,8 +397,7 @@ export default class TaskScan {
     changes: string[];
   } {
     const words = parseTsv(tsv);
-    const shaped = shapeRows(words);
-
+    const { rows: shaped, table } = shapeRows(words);
     const rows = shaped.map((row) => row.words);
     // The open task's own steps are the rows between these two headings; the
     // trader's chatter above them and the task list in the other pane are not
@@ -358,7 +413,7 @@ export default class TaskScan {
     // A trader's list ends with an OPERATIONAL TASKS section. The cards under
     // it are the rotating ones, whose names are short and generic enough
     // ("Elimination") that nothing else about the row would give them away.
-    const operationalHeading = words.find((w) => /^operational$/i.test(w.text));
+    const operationalHeading = words.find((w) => /^operationa?l?$/i.test(w.text));
     const objectivePane = objectivesHeading
       ? {
           top: objectivesHeading.top,
@@ -374,6 +429,20 @@ export default class TaskScan {
     const objectiveRows: (Placed & ScannedTaskObjective)[] = [];
     // Where each task row stored in this pass sat
     const taskRowsAt: (Placed & { key: string })[] = [];
+    // Every row this pass read as a task, held back until the end: whether a
+    // row may bring a rotating task into being depends on what else was on
+    // the screen with it
+    const readings: {
+      resolved: { taskId: string | null; name: string };
+      place: Placed;
+      location: string;
+      status: string;
+      percent?: number;
+      wellFormed: boolean;
+      underOperational: boolean;
+      inTable: boolean;
+      countdown: Countdown | null;
+    }[] = [];
     const placeOf = (row: Word[]): Placed => {
       const { top, left, right } = rowBounds(row);
       return { top, left, right };
@@ -514,6 +583,11 @@ export default class TaskScan {
         if (firstInColumn >= 1) nameEnd = Math.min(nameEnd, firstInColumn);
       }
       const place = placeOf(row);
+      const inTable =
+        table !== null &&
+        place.top > table.top &&
+        place.left >= table.left &&
+        place.right <= table.right;
       const underOperational =
         operationalHeading !== undefined &&
         place.top > operationalHeading.top &&
@@ -541,6 +615,58 @@ export default class TaskScan {
         wellFormed
       );
       if (!resolved) continue;
+      // A location is a column of the table, never the name of a task
+      if (!resolved.taskId && locations.has(wordSetKey(resolved.name))) continue;
+      readings.push({
+        resolved,
+        place,
+        location,
+        status,
+        percent,
+        wellFormed,
+        underOperational,
+        inTable,
+        countdown,
+      });
+    }
+
+    // The game's STORY and SIDE tabs list nothing but tasks the catalog knows,
+    // so a row there that matched nothing is a misread - of a neighbouring row,
+    // or of a line out of the open task's description - and must not become a
+    // rotating task. Three things say otherwise: the row sits under a trader's
+    // OPERATIONAL TASKS heading, it carries the countdown only rotating tasks
+    // have, or nothing on the whole screen matched the catalog, which is what
+    // the OPERATIONAL tab looks like.
+    const catalogRows = readings.filter((r) => r.resolved.taskId).length;
+    // Most of the screen being rows the catalog cannot explain, rather than
+    // none of it, so that one rotating task whose name happens to look like a
+    // real one does not shut the whole tab out. It only speaks for the
+    // character's OPERATIONAL tab, which is a table with labelled columns - a
+    // trader's page is two panes of prose and has its own heading to go by.
+    const rotatingScreen = catalogRows < readings.length - catalogRows;
+    const operational = (reading: (typeof readings)[number]) =>
+      reading.underOperational ||
+      reading.countdown !== null ||
+      // A row of that table either falls inside the labelled columns or at
+      // least filled in a location, which a card in a trader's list - the
+      // other place an unmatched row can come from - never does
+      (rotatingScreen && (reading.inTable || reading.location !== ""));
+    // Rows that may bring one into being go first, so that a second reading of
+    // the same task - a trader's detail header, which knows its map, while the
+    // card in the list does not - recognises it and fills in what it knows
+    const ordered = [
+      ...readings.filter((r) => r.resolved.taskId || operational(r)),
+      ...readings.filter((r) => !r.resolved.taskId && !operational(r)),
+    ];
+
+    for (const reading of ordered) {
+      const { resolved, place, location, status, percent, wellFormed, countdown } = reading;
+      // Not a screen that mints rotating tasks - but a row can still update
+      // one we already have
+      if (!resolved.taskId && !operational(reading) && !this.knowsUnknown(resolved.name)) {
+        continue;
+      }
+      if (!resolved.taskId && this.isDismissed(unknownKey(resolved.name, location))) continue;
       const key = resolved.taskId
         ? `id:${resolved.taskId}`
         : this.keyForUnknown(resolved.name, location);
@@ -592,6 +718,7 @@ export default class TaskScan {
           countdown && !resolved.taskId ? now + countdown.ms : previous?.expiresAt,
       });
       taskRowsAt.push({ ...place, key });
+      if (this.sessionKnown) this.sessionReads.set(key, (this.sessionReads.get(key) ?? 0) + 1);
       taskRows++;
     }
 
@@ -637,6 +764,21 @@ export default class TaskScan {
   // The objective rows on screen all belong to the one task that is open,
   // so find the active task whose objectives they match best and record
   // each matched row's done / not-done state for it
+  // Did the player throw this reading away recently?
+  private isDismissed(key: string): boolean {
+    const until = this.dismissed.get(key);
+    if (until === undefined) return false;
+    if (until > Date.now()) return true;
+    this.dismissed.delete(key);
+    return false;
+  }
+
+  // Is there already a rotating task by this name, wherever it is done?
+  private knowsUnknown(name: string): boolean {
+    const prefix = `${normalizeName(name)}@`;
+    return [...this.tasks.keys()].some((key) => key.startsWith(prefix));
+  }
+
   // A task no catalog knows is identified by its name and where it is done,
   // but not every screen has a location column: a trader's list shows the
   // name alone. Rather than store that as a second task, reuse the entry we
@@ -890,7 +1032,34 @@ export default class TaskScan {
         seen: Math.max(task.seen ?? 1, existing?.seen ?? 1),
       });
     }
+    if (this.reconcile()) changed = true;
     if (changed) this.save();
+  }
+
+  // Every reading of a rotating task we hold, judged against the others. A
+  // scan sees the same list many times over, so a name that is only ever a
+  // piece of a fuller one - "vansfer" beside "Find and transfer" - is that
+  // task read badly, not a second task. Whatever the bad reading learned goes
+  // to the good one before it is dropped.
+  private reconcile(): boolean {
+    const unknown = [...this.tasks.values()].filter((t) => !t.taskId);
+    if (unknown.length < 2) return false;
+    let changed = false;
+    for (const reading of unknown) {
+      const better = unknown.find(
+        (other) => other !== reading && this.tasks.has(other.key) && isMisreadOf(reading.name, other.name)
+      );
+      if (!better) continue;
+      log.info(`Tasks screen scan: "${reading.name}" is "${better.name}" read badly - dropping it`);
+      better.objectives = better.objectives ?? reading.objectives;
+      better.expiresAt = better.expiresAt ?? reading.expiresAt;
+      better.percent = better.percent ?? reading.percent;
+      better.traderId = better.traderId ?? reading.traderId;
+      better.seen = Math.max(better.seen ?? 1, reading.seen ?? 1);
+      this.tasks.delete(reading.key);
+      changed = true;
+    }
+    return changed;
   }
 
   private load(): void {
@@ -910,10 +1079,11 @@ export default class TaskScan {
         return;
       }
       for (const t of data.tasks ?? []) {
-        // v3 gave a rotating task whatever lines sat under it on screen as its
-        // steps, which on a trader's page was the trader's own chatter. Those
-        // are dropped; the next scan of the task reads its real ones.
-        this.tasks.set(t.key, (data.version ?? 1) < 4 ? { ...t, objectives: undefined } : t);
+        // Rotating tasks stored before v5 could have been minted from a
+        // misread of any screen, and their steps from whatever sat under them.
+        // Both are cheap to read again, so neither is worth carrying over.
+        if (!t.taskId && (data.version ?? 1) < 5) continue;
+        this.tasks.set(t.key, t);
       }
       for (const o of data.objectives ?? []) {
         // Drop rows saved before merged-row detection (a status word or
@@ -925,6 +1095,9 @@ export default class TaskScan {
         this.objectiveStates.set(o.key, { ...o, doneSeen: o.doneSeen ?? (o.done ? 1 : 0) });
       }
       for (const [k, v] of Object.entries(data.toasts ?? {})) this.toasts.set(k, v as ToastState);
+      for (const [k, until] of Object.entries(data.dismissed ?? {})) {
+        if (typeof until === "number" && until > Date.now()) this.dismissed.set(k, until);
+      }
       this.lastScanAt = data.lastScanAt ?? 0;
       this.lastScanCount = data.lastScanCount ?? 0;
     } catch (error) {
@@ -943,6 +1116,7 @@ export default class TaskScan {
           objectives: [...this.objectives.values()],
           objectiveStates: [...this.objectiveStates.values()],
           toasts: Object.fromEntries(this.toasts),
+          dismissed: Object.fromEntries(this.dismissed),
           lastScanAt: this.lastScanAt,
           lastScanCount: this.lastScanCount,
         })
@@ -987,8 +1161,6 @@ const PANE_GAP_PX = 100;
 // The game's task rows are around 100px apart and their cells sit on baselines
 // within 20px of each other.
 const CARD_LINE_PX = 20;
-// How many words of a countdown can sit next to each other ("1 day(s) 02:05")
-const COUNTDOWN_MAX_WORDS = 3;
 // The words the character's Tasks screen labels its columns with
 const TABLE_HEADINGS = ["task", "location", "status"];
 // How far outside the labelled columns a row of that table may still reach
@@ -1037,25 +1209,40 @@ function splitAcrossPanes(row: Word[]): Word[][] {
 // on its own line, so it is taken off here and remembered for the row rather
 // than left among the row's words where it would sit between the name and the
 // location once the lines are put back together.
-type Countdown = { ms: number; left: number; right: number };
+type Countdown = { ms: number; left: number; right: number; top: number; centre: number };
 type ShapedRow = { words: Word[]; countdown: Countdown | null };
 
 function takeCountdown(row: Word[]): ShapedRow {
-  const texts = row.map((w) => w.text);
   for (let i = 0; i < row.length; i++) {
-    for (let take = Math.min(COUNTDOWN_MAX_WORDS, row.length - i); take >= 1; take--) {
-      const ms = countdownMs(texts.slice(i, i + take).join(" "));
-      if (ms === null) continue;
-      const clock = row.slice(i, i + take);
-      return {
-        words: [...row.slice(0, i), ...row.slice(i + take)],
-        countdown: {
-          ms,
-          left: clock[0].left,
-          right: clock[clock.length - 1].left + clock[clock.length - 1].width,
-        },
-      };
+    const clock = clockMs(row[i].text);
+    if (clock === null) continue;
+    // "1 day(s)" sits in front of the clock as its own words, and OCR splits
+    // the brackets off often enough that the whole prefix has to be walked
+    // back over rather than matched in one go - miss it and a task with a day
+    // left on it reads as the minutes alone
+    let start = i;
+    let days = 0;
+    let sawDayWord = false;
+    for (let back = i - 1; back >= 0 && i - back <= DAY_PREFIX_WORDS; back--) {
+      if (DAY_WORD.test(row[back].text)) {
+        sawDayWord = true;
+        start = back;
+        continue;
+      }
+      if (sawDayWord && /^\d{1,2}$/.test(row[back].text)) {
+        days = Number(row[back].text);
+        start = back;
+      }
+      break;
     }
+    const ms = days * 24 * 3600 * 1000 + clock;
+    if (ms <= 0 || ms > MAX_COUNTDOWN_MS) continue;
+    const taken = row.slice(start, i + 1);
+    const where = rowBounds(taken);
+    return {
+      words: [...row.slice(0, start), ...row.slice(i + 1)],
+      countdown: { ms, left: where.left, right: where.right, top: where.top, centre: where.centre },
+    };
   }
   return { words: row, countdown: null };
 }
@@ -1064,7 +1251,9 @@ function takeCountdown(row: Word[]): ShapedRow {
 // one row of the table is, so cells sitting far apart across it can still be
 // put back together; without it (a trader's page, which is two panes side by
 // side) only a column gutter's worth of space is allowed.
-function findTable(rows: Word[][]): { left: number; right: number; top: number } | null {
+type TaskTable = { left: number; right: number; top: number };
+
+function findTable(rows: Word[][]): TaskTable | null {
   for (const row of rows) {
     const texts = row.map((w) => w.text.toLowerCase());
     if (!TABLE_HEADINGS.every((heading) => texts.includes(heading))) continue;
@@ -1095,22 +1284,28 @@ function overlaps(a: { left: number; right: number }, b: { left: number; right: 
   return a.right >= b.left && b.right >= a.left;
 }
 
-function mergeCardLines(
-  rows: ShapedRow[],
-  table: { left: number; right: number; top: number } | null
-): ShapedRow[] {
+// Where a line sits, which for a line that was nothing but a countdown is
+// where that countdown sat
+function lineBounds(row: ShapedRow): { top: number; left: number; right: number; centre: number } {
+  return row.words.length > 0 ? rowBounds(row.words) : (row.countdown as Countdown);
+}
+
+function mergeCardLines(rows: ShapedRow[], table: TaskTable | null): ShapedRow[] {
   const out: ShapedRow[] = [];
   let current: ShapedRow | null = null;
   let lastCentre = -Infinity;
-  for (const row of [...rows].sort((a, b) => rowBounds(a.words).centre - rowBounds(b.words).centre)) {
-    const here = rowBounds(row.words);
+  const ordered = [...rows]
+    .filter((row) => row.words.length > 0 || row.countdown !== null)
+    .sort((a, b) => lineBounds(a).centre - lineBounds(b).centre);
+  for (const row of ordered) {
+    const here = lineBounds(row);
     if (!current || here.centre - lastCentre > CARD_LINE_PX) {
       current = { words: [...row.words], countdown: row.countdown };
       out.push(current);
       lastCentre = here.centre;
       continue;
     }
-    let { left, right } = rowBounds(current.words);
+    let { left, right } = lineBounds(current);
     // Anything within a column gutter of the row so far belongs to it. Inside
     // the labelled table the whole width is one row, so the gap between the
     // task's name and its location column - which is far wider than a gutter -
@@ -1147,7 +1342,7 @@ function mergeCardLines(
       if (keepsClock) current.countdown = current.countdown ?? clock;
       lastCentre = here.centre;
     }
-    if (rest.length > 0) {
+    if (rest.length > 0 || (!keepsClock && clock !== null)) {
       out.push({ words: rest, countdown: keepsClock ? null : clock });
       if (taken.length === 0 && !keepsClock) {
         current = out[out.length - 1];
@@ -1155,12 +1350,13 @@ function mergeCardLines(
       }
     }
   }
-  return out;
+  return out.filter((row) => row.words.length > 0);
 }
 
-function shapeRows(words: Word[]): ShapedRow[] {
+function shapeRows(words: Word[]): { rows: ShapedRow[]; table: TaskTable | null } {
   const rows = groupRows(words);
-  return mergeCardLines(rows.flatMap(splitAcrossPanes).map(takeCountdown), findTable(rows));
+  const table = findTable(rows);
+  return { rows: mergeCardLines(rows.flatMap(splitAcrossPanes).map(takeCountdown), table), table };
 }
 
 function groupRows(words: Word[]): Word[][] {
@@ -1415,7 +1611,12 @@ function cleanUnknownName(
   wellFormed = false
 ): string | null {
   const tokens = stripTrailingMapWords(read.trim().split(/\s+/).filter(Boolean), mapWords);
-  while (tokens.length && tokens[0] !== "A" && JUNK_WORD.test(tokens[0])) tokens.shift();
+  // The row icon comes back as a letter or two in front of the name ("Sj Exit
+  // the location"), which is not junk by shape - it just is not a word
+  const leadingJunk = (token: string) =>
+    token !== "A" &&
+    (JUNK_WORD.test(token) || (token.length <= 2 && !SHORT_WORDS.has(token.toLowerCase())));
+  while (tokens.length > 1 && leadingJunk(tokens[0])) tokens.shift();
   while (tokens.length && /[^A-Za-z0-9'\u2019.!?-]/.test(tokens[tokens.length - 1])) tokens.pop();
   const name = tokens.join(" ");
   const letters = (name.match(/[A-Za-z]/g) ?? []).length;
@@ -1477,6 +1678,32 @@ function resolveTaskName(
   }
   const name = cleanUnknownName(read, catalog, mapWords, wellFormed);
   return name ? { taskId: null, name } : null;
+}
+
+// How far a piece of a name may be from the words it was read off. OCR loses
+// the front of a word about as often as it garbles one letter, so this is not
+// as tight as a spelling check would be.
+const MISREAD_DISTANCE = 2;
+// Below this, too many unrelated short names are within reach of each other
+const MISREAD_MIN_LETTERS = 5;
+
+// Is `name` a worse reading of some run of words out of `better`?
+function isMisreadOf(name: string, better: string): boolean {
+  const piece = normalizeName(name);
+  const whole = normalizeName(better);
+  if (piece.length < MISREAD_MIN_LETTERS || piece.length >= whole.length) return false;
+  // A run of its words, exactly
+  if (` ${whole} `.includes(` ${piece} `)) return true;
+  // ... or near enough that OCR could have made one from the other
+  const words = whole.split(" ");
+  for (let from = 0; from < words.length; from++) {
+    for (let to = from + 1; to <= words.length; to++) {
+      const run = words.slice(from, to).join(" ");
+      if (Math.abs(run.length - piece.length) > MISREAD_DISTANCE) continue;
+      if (levenshtein(piece, run) <= MISREAD_DISTANCE) return true;
+    }
+  }
+  return false;
 }
 
 function levenshtein(a: string, b: string): number {

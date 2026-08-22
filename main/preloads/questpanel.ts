@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld("electron", {
   toggleScan: () => {
     ipcRenderer.send(IpcConstants.QuestPanelToggleScan);
   },
+  forgetQuestTask: (questId: string) => {
+    ipcRenderer.send(IpcConstants.QuestPanelForgetTask, questId);
+  },
   requestScanStatus: () => {
     ipcRenderer.send(IpcConstants.QuestPanelScanStatusRequest);
   },

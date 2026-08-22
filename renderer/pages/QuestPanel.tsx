@@ -6,6 +6,7 @@ import type {
   QuestPanelQuest,
   QuestPanelObjective,
 } from "../../models/TaskData";
+import { OPERATIONAL_ID_PREFIX } from "../../models/TaskData";
 import type { QuestPanelBounds, QuestScanStatus } from "../../models/QuestPanelWindow";
 
 // Slide-in quest tracker (think Questie for Tarkov). The main process sends
@@ -635,12 +636,19 @@ function Quest({
   // moment you want to see what led us to believe it.
   const finished = !!(quest.ready || quest.allDone);
   const drag = useContext(DragContext);
+  // Only the scanner's own guesses can be thrown away; a quest the catalog
+  // knows comes from your logs and would be back on the next refresh
+  const scanned = quest.id.startsWith(OPERATIONAL_ID_PREFIX);
   return (
     <div
       data-quest-id={quest.id}
       // Click collapses, press and move reorders (see useQuestOrder)
       {...drag?.cardProps(quest.id)}
       {...wikiProps(quest.wiki)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (scanned) window.electron.forgetQuestTask(quest.id);
+      }}
       className={`group/quest relative rounded bg-stone-800/70 px-2.5 py-1.5 select-none ${
         drag?.draggingId === quest.id
           ? "opacity-60 ring-1 ring-stone-500 cursor-grabbing"
@@ -650,7 +658,9 @@ function Quest({
       <button
         className="w-full flex items-baseline gap-2 whitespace-nowrap overflow-hidden text-left"
         onClick={onToggle}
-        title={quest.name}
+        title={scanned ? `${quest.name}
+
+Right-click to throw this reading away` : quest.name}
       >
         <span className={`text-[15px] font-black truncate ${finished ? "text-green-400" : "text-white"}`}>
           {quest.name}
@@ -669,11 +679,6 @@ function Quest({
           )}
           {!finished && quest.doneHere && (
             <span className="text-green-500/80 font-bold mr-1.5" title="Nothing left to do on this list">DONE HERE</span>
-          )}
-          {!finished && quest.subtasksDone && (
-            <span className="text-green-400 mr-1.5" title="Subtask completed this raid">
-              ✓{quest.subtasksDone}
-            </span>
           )}
           {quest.expiresAt !== undefined && <TimeLeft at={quest.expiresAt} />}
           {quest.percent !== undefined && (

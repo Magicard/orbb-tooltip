@@ -45,6 +45,7 @@ export default class IpcConstants {
   static RequestScreenCalibration = "request-screen-calibration";
   static QuestPanelScanStatusRequest = "quest-panel-scan-status-request";
   static QuestPanelToggleScan = "quest-panel-toggle-scan";
+  static QuestPanelForgetTask = "quest-panel-forget-task";
   static QuestPanelClose = "quest-panel-close";
   static QuestPanelToggleMap = "quest-panel-toggle-map";
   static MapWindowData = "map-window-data";

@@ -37,7 +37,7 @@ import GameLogWatcher from "../models/GameLogWatcher";
 import TaskScan from "../models/TaskScan";
 import MapWindow from "../models/MapWindow";
 import TrackerSync from "../models/TrackerSync";
-import type { QuestChange } from "../models/TaskData";
+import { OPERATIONAL_ID_PREFIX, type QuestChange } from "../models/TaskData";
 import koffi from "koffi";
 
 // Hotkey registration functions
@@ -256,6 +256,7 @@ try {
   let questPanel: QuestPanelWindow | null = null;
   let gameLog: GameLogWatcher | null = null;
   let questPanelHotkey: string | null = null;
+  let questPanelRefreshHotkey: string | null = null;
   let questPanelPushTimer: NodeJS.Timeout | null = null;
   // Map the user picked in the panel; cleared when a new raid starts
   let questPanelMapOverride: string | null = null;
@@ -569,11 +570,30 @@ try {
       }, 300);
     }
 
-    function registerQuestPanelHotkey(accelerator: string) {
-      if (questPanelHotkey) {
-        globalShortcut.unregister(questPanelHotkey);
-        questPanelHotkey = null;
+    // Ctrl and the panel key together: put the overlays back in order without
+    // restarting. Windows drops the low-level wheel hook from time to time,
+    // and a window that missed its way out of click-through stays dead until
+    // something tells it otherwise. Nothing here throws anything away, so it
+    // is safe to lean on whenever the panel stops answering.
+    function refreshOverlays() {
+      for (const win of [questPanel, mapWindow]) {
+        if (!win || win.isDestroyed()) continue;
+        // Hand the window back to the hover poll, which decides again within
+        // a tenth of a second
+        win.setInteractive(false);
+        if (win.isVisible()) win.setAlwaysOnTop(true, "screen-saver");
       }
+      ocr?.setWheelHookEnabled(questPanel?.isPanelVisible() === true);
+      pushQuestPanelData();
+      log.info("Overlays refreshed by hotkey");
+    }
+
+    function registerQuestPanelHotkey(accelerator: string) {
+      for (const registered of [questPanelHotkey, questPanelRefreshHotkey]) {
+        if (registered) globalShortcut.unregister(registered);
+      }
+      questPanelHotkey = null;
+      questPanelRefreshHotkey = null;
       const wanted = accelerator?.trim() || DEFAULT_QUEST_PANEL_HOTKEY;
       try {
         const ok = globalShortcut.register(wanted, () => {
@@ -588,6 +608,16 @@ try {
         }
       } catch (error) {
         log.warn(`Invalid quest panel hotkey "${wanted}":`, error);
+      }
+      const refresh = `CommandOrControl+${wanted}`;
+      try {
+        if (globalShortcut.register(refresh, refreshOverlays)) {
+          questPanelRefreshHotkey = refresh;
+        } else {
+          log.warn(`Overlay refresh hotkey "${refresh}" could not be registered`);
+        }
+      } catch (error) {
+        log.warn(`Invalid overlay refresh hotkey "${refresh}":`, error);
       }
     }
 
@@ -745,19 +775,26 @@ try {
     // free) until it is toggled off, it has seen no task rows for a while,
     // or this much time has passed
     const SCAN_SESSION_MS = 3 * 60 * 1000;
-    let scanSessionPasses = 0;
     // The wait *between* passes. A pass that read something means you are
     // navigating, so the next one starts straight away; otherwise we idle at
     // the slower rate, where each check is only the ~70ms "has the screen
-    // changed" test. (Shortening the idle rate would not help: a pass that
-    // finds a changed screen spends ~1.5s in OCR, which dwarfs the wait.)
+    // changed" test.
     const SCAN_SESSION_BUSY_MS = 60;
-    const SCAN_SESSION_IDLE_MS = 400;
+    const SCAN_SESSION_IDLE_MS = 200;
+    // How often a pass reads the screen properly rather than asking whether it
+    // has changed. A screen that is sitting still is skipped by the cheap test
+    // for ever, so without this the Tasks screen is read exactly once a
+    // session - and one reading is one roll of the dice. OCR is not the same
+    // twice over: a counter the progress bar swallowed on one read comes back
+    // on the next, and a rotating task needs a second sighting before anything
+    // is announced. Out of a raid nothing else wants the CPU, so we pay for it.
+    const SCAN_FORCED_EVERY = 3;
     // Stop after this many reads that found no task rows at all - so a
     // hotkey press on a raid screen (every frame different, every pass a
     // full OCR) gives up quickly - but never before the player has had time
-    // to reach the Tasks screen
-    const SCAN_SESSION_MAX_EMPTY_PASSES = 5;
+    // to reach the Tasks screen. Higher than it looks because forced reads
+    // count where a skipped frame did not.
+    const SCAN_SESSION_MAX_EMPTY_PASSES = 8;
     // Reads that must agree before an OCR-derived completion is written to
     // TarkovTracker (the panel shows it after the first)
     const OCR_WRITE_CONFIRMATIONS = 2;
@@ -780,6 +817,8 @@ try {
         if (mapWindow && !mapWindow.isDestroyed()) mapWindow.showMap();
       }
       getTrackerSync().release();
+      // Now that every pass is in, throw out the rows only one of them saw
+      taskScan?.endSession();
       log.info(`Tasks screen scan session ${why}: ${scanSessionUpdates} update(s)`);
       sendScanStatus(false);
       pushQuestPanelData();
@@ -825,7 +864,7 @@ try {
       // Everything this session learns goes to TarkovTracker in one round
       // when it finishes, rather than a trickle of writes while you scroll
       getTrackerSync().hold();
-      scanSessionPasses = 0;
+      taskScan?.beginSession();
       scanSessionUpdates = 0;
       scanSessionNewTasks = 0;
       scanSessionEndedAt = null;
@@ -834,13 +873,20 @@ try {
       let lastPassFound = 1;
       const startedAt = Date.now();
       let everFound = false;
+      // Every attempt, including the ones the screen-changed test waves away
+      let attempts = 0;
       const tick = async () => {
-        const found = await scanTasksScreenOnce(scanSessionPasses === 0);
+        // In a raid the game needs its frames more than we do, so only the
+        // first pass is read in full there
+        const forceRead = gameLog?.state.inRaid
+          ? attempts === 0
+          : attempts % SCAN_FORCED_EVERY === 0;
+        attempts++;
+        const found = await scanTasksScreenOnce(forceRead);
         // -1 = screen unchanged: nothing new to learn; it only counts as an
         // empty pass when the last real read was empty too (the player has
         // left the Tasks screen and is sitting still somewhere else)
         if (found >= 0) {
-          scanSessionPasses++;
           lastPassFound = found;
           scanSessionEmptyRuns = found > 0 ? 0 : scanSessionEmptyRuns + 1;
           if (found > 0) everFound = true;
@@ -1291,10 +1337,39 @@ try {
     // forwarding deliver unreliably (a missed leave left the panel either
     // stuck clickable or stuck click-through with hover styles still
     // lighting up). A press in progress keeps the window interactive so a
-    // drag can run past its edge; in a raid the game owns the cursor, so
-    // nothing is ever interactive.
+    // drag can run past its edge.
+    //
+    // While the game owns the mouse there is nothing to hover with and taking
+    // it would cost the player their aim - but that is not the whole of a
+    // raid: open the inventory on Tab and the game hands a cursor back, and
+    // the panel should work there like anywhere else. Windows knows which of
+    // the two it is, so ask it rather than reading anything into the raid.
     const overlayUser32 = koffi.load("user32.dll");
     const GetAsyncKeyState = overlayUser32.func("short GetAsyncKeyState(int vKey)");
+    // Nameless on purpose: koffi's type names are global to the process and
+    // the OCR helper has already claimed POINT
+    const CURSORINFO = koffi.struct({
+      cbSize: "uint32",
+      flags: "uint32",
+      hCursor: "void *",
+      ptScreenPos: koffi.struct({ x: "long", y: "long" }),
+    });
+    const GetCursorInfo = overlayUser32.func("__stdcall", "GetCursorInfo", "bool", [
+      koffi.inout(koffi.pointer(CURSORINFO)),
+    ]);
+    // CURSOR_SHOWING
+    const CURSOR_ON_SCREEN = 0x01;
+    const cursorOnScreen = (): boolean => {
+      const info: { cbSize: number; flags: number; hCursor: unknown; ptScreenPos: { x: number; y: number } } = {
+        cbSize: koffi.sizeof(CURSORINFO),
+        flags: 0,
+        hCursor: null,
+        ptScreenPos: { x: 0, y: 0 },
+      };
+      // If the call fails, assume there is one: the worst that costs is a
+      // hoverable panel, where the other way round is a dead one
+      return !GetCursorInfo(info) || (info.flags & CURSOR_ON_SCREEN) !== 0;
+    };
     const OVERLAY_HOVER_POLL_MS = 100;
     setInterval(() => {
       const overlays = [questPanel, mapWindow].filter(
@@ -1303,17 +1378,25 @@ try {
       if (overlays.length === 0) return;
       const cursor = screen.getCursorScreenPoint();
       const buttonDown = (GetAsyncKeyState(0x01) & 0x8000) !== 0;
-      const inRaid = !!gameLog?.state.inRaid;
+      // Aiming down a sight, not sitting in the inventory
+      const gameHasTheMouse = !!gameLog?.state.inRaid && !cursorOnScreen();
       for (const w of overlays) {
         const b = w.getBounds();
         const inside =
           cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height;
-        w.setInteractive(!inRaid && (inside || (buttonDown && w.isInteractive())));
+        w.setInteractive(!gameHasTheMouse && (inside || (buttonDown && w.isInteractive())));
       }
     }, OVERLAY_HOVER_POLL_MS);
 
     // Quest panel buttons
     ipcMain.on(IpcConstants.QuestPanelToggleScan, () => toggleScanSession());
+    // Right-click throws a scanned task away. Only the rotating ones: a quest
+    // the catalog knows comes from your own logs and would be back a second
+    // later, so there is nothing to throw away.
+    ipcMain.on(IpcConstants.QuestPanelForgetTask, (_event, questId: string) => {
+      if (typeof questId !== "string" || !questId.startsWith(OPERATIONAL_ID_PREFIX)) return;
+      if (taskScan?.forget(questId.slice(OPERATIONAL_ID_PREFIX.length))) pushQuestPanelData();
+    });
     ipcMain.on(IpcConstants.RequestScreenCalibration, () => screenCalibrationStep?.());
 
     // Middle-click on a quest opens its wiki page in the default browser;

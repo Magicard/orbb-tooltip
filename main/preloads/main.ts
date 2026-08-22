@@ -39,6 +39,7 @@ declare global {
       openExternal: (url: string) => void;
       toggleMap: () => void;
       toggleScan: () => void;
+      forgetQuestTask: (questId: string) => void;
       requestScanStatus: () => void;
       // Exposed by the map window preload only (see ./map.ts)
       setMapBounds: (

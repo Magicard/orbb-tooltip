@@ -178,10 +178,26 @@ export type QuestPanelQuest = {
   percent?: number;
   // When a rotating Operational task runs out, in wall-clock ms
   expiresAt?: number;
-  // From in-raid notifications: all objectives done / N subtasks done
+  // The game said so itself: all objectives done, waiting to be handed in
   ready?: boolean;
-  subtasksDone?: number;
 };
+
+// How good a reason we have for believing an objective is done. When the game
+// disagrees with us, the cheapest beliefs are the ones to give up.
+const EVIDENCE = { none: 0, tickOnce: 1, tickTwice: 2, tracker: 3 };
+// Ticks seen in this many separate reads count as corroborated
+const OCR_TICK_CORROBORATED = 2;
+// The game floors the percentage it draws, so two of three reads as 66%
+const BAR_ROUNDING = 2;
+
+// The weakest reason behind a step the game shows as one line
+function reasonFor(step: QuestPanelObjective[], evidence: Map<string, number>): number {
+  return Math.min(...step.map((o) => evidence.get(o.id) ?? 0));
+}
+
+// What marks a panel quest as one only the scanner knows about, so the panel
+// and the main process agree on which cards can be thrown away
+export const OPERATIONAL_ID_PREFIX = "operational:";
 
 // One thing that changed about a quest, and where we learned it
 export type QuestChange = {
@@ -839,7 +855,7 @@ export default class TaskData {
         inRaid: true,
       }));
       const quest: QuestPanelQuest = {
-        id: `operational:${daily.key}`,
+        id: `${OPERATIONAL_ID_PREFIX}${daily.key}`,
         name: daily.name,
         trader: traderNames[daily.traderId ?? ""] ?? "",
         kappa: false,
@@ -897,6 +913,9 @@ export default class TaskData {
       const toast = scan?.toastFor(task.id, task.name);
       // The game's own verdict, read off the trader's task list
       const readyOnScreen = scan?.readyFor(task.id) === true;
+      // How good our reason is for believing each objective is done, so that
+      // when the game contradicts us we know which belief to give up first
+      const evidence = new Map<string, number>();
       const allObjectives: QuestPanelObjective[] = task.objectives
         .map((o, order) => {
           const p = objectiveState(o.id);
@@ -918,6 +937,17 @@ export default class TaskData {
           const scannedDone = state?.done === true || twinState?.done === true;
           const trackerCount = Math.min(p?.count ?? 0, o.count);
           const count = Math.min(o.count, Math.max(trackerCount, scannedCount, twinCount));
+          const seenTicked = Math.max(state?.doneSeen ?? 0, twinState?.doneSeen ?? 0);
+          evidence.set(
+            o.id,
+            p?.complete === true
+              ? EVIDENCE.tracker
+              : seenTicked >= OCR_TICK_CORROBORATED
+                ? EVIDENCE.tickTwice
+                : scannedDone || (o.count > 0 && count >= o.count)
+                  ? EVIDENCE.tickOnce
+                  : EVIDENCE.none
+          );
           return {
             id: o.id,
             order,
@@ -934,40 +964,81 @@ export default class TaskData {
       const wanted = new Set(task.objectives.filter(objectiveFilter).map((o) => o.id));
       const objectives = allObjectives.filter((o) => wanted.has(o.id));
       if (objectives.length === 0) return null;
-      // An accepted quest is never dropped because we believe its work is
-      // done - that belief can be wrong (a misread tick) and the player
-      // still has to hand it in. It stays, flagged, sorted last.
-      const doneHere = objectives.every((o) => o.done);
-      const allDone = allObjectives.every((o) => o.done);
+      // ---- what is actually done, from the steadiest source down ----
+      //
+      // Four things tell us about a quest and they do not always agree, so
+      // they are read in order of how much they know. The game stating the
+      // whole task is finished beats its progress bar; the bar - the game's
+      // own count of how far along the task is - beats a tick we read off one
+      // row; and a "subtask completed" notification, which never says which
+      // subtask it means, is the last word rather than the first.
       const percent = scan?.percentFor(task.id);
-      if (toast?.ready) {
-        for (const o of objectives) {
-          o.done = true;
-          o.count = o.total;
+      const required = allObjectives.filter((o) => !o.optional);
+      // The bar has to be read against the same list the game is describing,
+      // and the game counts one step per distinct wording: Aid Stations shows
+      // a single "Hand over the item" where the catalog holds one per key.
+      const steps = new Map<string, QuestPanelObjective[]>();
+      for (const objective of required) {
+        steps.set(objective.text, [...(steps.get(objective.text) ?? []), objective]);
+      }
+      const grouped = [...steps.values()];
+      // The most steps the bar can be describing. Rounding is generous by a
+      // couple of points because the game floors what it draws (two of three
+      // reads as 66%), and a lone step's bar is its counter - three kills out
+      // of five is 60% and nothing about it is finished.
+      const barAllows =
+        percent === undefined || grouped.length === 0
+          ? null
+          : Math.floor(((percent + BAR_ROUNDING) * grouped.length) / 100);
+      const doneCount = () => grouped.filter((step) => step.every((o) => o.done)).length;
+
+      // 1. The game says the whole task is done: a "ready to be completed"
+      //    notification, "Finished!" on the trader's list, or a full bar -
+      //    which is the same statement in the game's own arithmetic
+      const saidFinished = toast?.ready === true || readyOnScreen || percent === 100;
+      if (saidFinished) {
+        for (const objective of allObjectives) {
+          if (objective.optional) continue;
+          objective.done = true;
+          objective.count = objective.total;
         }
-      } else if (readyOnScreen) {
-        for (const o of objectives) {
-          if (o.optional) continue;
-          o.done = true;
-          o.count = o.total;
+      } else {
+        // 2. The bar caps what we may believe. Where we think more is done
+        //    than it allows, the weakest-evidenced ticks come off first.
+        if (barAllows !== null) {
+          const believed = grouped
+            .filter((step) => step.every((o) => o.done))
+            .sort((a, b) => reasonFor(a, evidence) - reasonFor(b, evidence));
+          for (const step of believed.slice(0, Math.max(0, believed.length - barAllows))) {
+            for (const objective of step) {
+              objective.done = false;
+              objective.count = Math.min(objective.count, Math.max(0, objective.total - 1));
+            }
+          }
         }
-      } else if (toast && toast.subtasks > 0) {
-        // "Subtask completed" does not say which one. If only one objective
-        // is outstanding it must be that; in a raid we can also pin it on
-        // the one that belongs to the map you are actually on.
-        // Judged over the whole quest, not just the objectives this list
-        // shows: a two-map quest shows one per map, and the toast could
-        // just as well have been about the other one
-        const open = allObjectives.filter((o) => !o.done && !o.optional && o.inRaid);
+
+        // 3. "Subtask completed" says something advanced but never what, so it
+        //    is only worth pinning on one objective when the rest of the quest
+        //    leaves no doubt - and never on the last one outstanding: finishing
+        //    a task brings its own notification, and this is not it.
+        const open = required.filter((o) => !o.done && o.inRaid);
         const onThisMap = state.inRaid
           ? open.filter((o) => currentMap && o.here && !o.anywhere)
           : [];
-        const target = open.length === 1 ? open[0] : onThisMap.length === 1 ? onThisMap[0] : null;
-        if (target) {
-          target.done = true;
-          target.count = target.total;
+        const room = barAllows === null || doneCount() < barAllows;
+        if (toast && toast.subtasks > 0 && room && open.length > 1 && onThisMap.length === 1) {
+          onThisMap[0].done = true;
+          onThisMap[0].count = onThisMap[0].total;
         }
       }
+
+      // An accepted quest is never dropped because we believe its work is
+      // done - that belief can be wrong (a misread tick) and the player still
+      // has to hand it in. It stays, flagged, sorted last. Judged last of all,
+      // once every source above has had its say.
+      const doneHere = objectives.every((o) => o.done);
+      const allDone = allObjectives.every((o) => o.done);
+
       // A single-objective quest's percent is its counter - an estimate, so
       // it may fill the bar but never complete the objective on its own
       if (
@@ -995,9 +1066,10 @@ export default class TaskData {
         ),
         doneHere: doneHere || undefined,
         allDone: allDone || undefined,
-        percent,
-        ready: toast?.ready || readyOnScreen || undefined,
-        subtasksDone: toast?.subtasks || undefined,
+        // Saying DONE beside a bar reading 50% tells the player two different
+        // things. Only ever corrects a bar we read; never invents one.
+        percent: percent !== undefined && (allDone || saidFinished) ? 100 : percent,
+        ready: saidFinished || undefined,
       };
     };
 
