@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useReducer, useMemo } from "react";
+import React, { useEffect, useRef, useState, useReducer, useMemo } from "react";
 import {
   IN_SCREEN_CONFIG,
   NO_SCANNING_CONFIG_FOUND,
@@ -17,14 +17,16 @@ import {
   numberWithCommas,
 } from "../../utils";
 import { ClientItem } from "../../models/Item";
-import MostRecentItem from "../components/MostRecentItem";
 import NumberFlow, { useCanAnimate } from "@number-flow/react";
 import ScannedSound from "../assets/item-scanned.wav";
 import UppedSound from "../assets/item-upped.wav";
 import ItemExistsSound from "../assets/item-exists.wav";
 import Settings from "./Settings";
+import Logo from "../assets/logo.png";
+import IpcConstants from "../../models/IpcConstants";
 import {
   GameMode,
+  GAME_MODE_LABELS,
   getGameMode,
   DEFAULT_QUEST_PANEL_HOTKEY,
   DEFAULT_QUEST_SCAN_HOTKEY,
@@ -55,18 +57,7 @@ export default function PriceList() {
   const previousSoundOnScanBitRef = useRef<boolean>(false);
   const previousSoundOnUpBitRef = useRef<boolean>(false);
   const previousSoundOnExistsBitRef = useRef<boolean>(false);
-  const gridRef = useRef<HTMLDivElement>(null);
-  const totalValueRef = useRef<HTMLDivElement>(null);
-  const [totalGridPosition, setTotalGridPosition] = useState<{
-    columnStart: number;
-    rowStart: number;
-  }>({ columnStart: 1, rowStart: 1 });
   const [showSettings, setShowSettings] = useState(false);
-  const [numCols, setNumCols] = useState(1);
-  const [numRows, setNumRows] = useState(1);
-  const [shouldShowOverflow, setShouldShowOverflow] = useState(false);
-  const [itemsToShow, setItemsToShow] = useState(0);
-  const [availableCells, setAvailableCells] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [soundVolume, setSoundVolume] = useState(1.0);
   const [lowestAcceptableScore, setLowestAcceptableScore] = useState(50);
@@ -127,6 +118,33 @@ export default function PriceList() {
       dispatchTotalLootValue({ type: "CALCULATE", priceList });
     }
   }, [priceList]);
+
+  // What the whole log is worth on the flea market and sold to traders
+  const totals = useMemo(() => {
+    let market = 0;
+    let trader = 0;
+    for (const item of priceList ?? []) {
+      if (!item) continue;
+      const count = item.count > 0 ? item.count : 1;
+      market += count * fleaPriceOf(item as ClientItem);
+      trader += count * (item.prices?.trader?.price ?? 0);
+    }
+    return { market, trader };
+  }, [priceList]);
+
+  // Who is playing (TarkovTracker's profile, when linked)
+  const [profile, setProfile] = useState<{
+    displayName: string | null;
+    playerLevel: number | null;
+    pmcFaction: string | null;
+  }>({ displayName: null, playerLevel: null, pmcFaction: null });
+  useEffect(() => {
+    window.electron.receive(
+      IpcConstants.ProfileInfo,
+      (_event: unknown, next: { displayName: string | null; playerLevel: number | null; pmcFaction: string | null }) =>
+        setProfile(next)
+    );
+  }, []);
 
   useCanAnimate({ respectMotionPreference: false });
 
@@ -233,90 +251,19 @@ export default function PriceList() {
     previousSoundOnExistsBitRef.current = triggerSoundOnExistsBit;
   }, [triggerSoundOnExistsBit, soundEnabled]);
 
-  const priceListSorted = useMemo(() => {
-    return [...priceList].sort(
-      (item1, item2) =>
-        getItemsPricePerSlot(item2 as ClientItem) -
-        getItemsPricePerSlot(item1 as ClientItem)
-    );
+  // Search log: newest scan at the top (the list itself is in scan order)
+  const searchLog = useMemo(() => [...priceList].reverse(), [priceList]);
+  // Lowest value last - what F2 removes
+  const lowestValueId = useMemo(() => {
+    let lowest: ImmutableObject<ClientItem> | null = null;
+    for (const item of priceList) {
+      if (!lowest || getItemsPricePerSlot(item as ClientItem) < getItemsPricePerSlot(lowest as ClientItem)) {
+        lowest = item;
+      }
+    }
+    return lowest?.id ?? null;
   }, [priceList]);
   
-
-  // Calculate grid dimensions and position Total Value in bottom right
-  useEffect(() => {
-    const calculateGridPosition = () => {
-      if (!gridRef.current) return;
-
-      if (totalValueRef.current) {
-        totalValueRef.current.style.display = "none";
-      }
-
-      const gridElement = gridRef.current;
-      const gridWidth = gridElement.clientWidth;
-      const gridHeight = gridElement.clientHeight;
-      const minColumnWidth = 70; // Minimum 70px per column
-      const minRowHeight = 30; // Minimum 30px per row
-
-      // Calculate number of columns and rows based on minimum sizes
-      // With minmax, grid will create as many tracks as fit with minimum size
-      const calculatedCols = Math.floor(gridWidth / minColumnWidth) || 1;
-      const calculatedRows = Math.floor(gridHeight / minRowHeight) || 1;
-
-      setNumCols(calculatedCols);
-      setNumRows(calculatedRows);
-
-
-      const totalGridCells = numCols * numRows;
-            const totalOccupiedCells = 5; // Total spans 2x2 = 4 cells
-            const availableCells = totalGridCells - totalOccupiedCells;
-
-            const shouldShowOverflow = priceListSorted.length > availableCells;
-            const itemsToShow = shouldShowOverflow ? availableCells - 1 : availableCells; // -2 for overflow indicator
-
-            setShouldShowOverflow(shouldShowOverflow);
-            setItemsToShow(itemsToShow);
-            setAvailableCells(availableCells);
-
-      // Position Total Value in bottom right (spans 2 columns and 2 rows)
-      // Start at second-to-last column/row so it spans to the last
-      const columnStart = Math.max(1, calculatedCols - 1);
-      const rowStart = Math.max(1, numRows - 1);
-
-      // Only produce a new state object when the position actually changed.
-      // A fresh object every run forced a re-render, which re-ran this effect,
-      // which produced another fresh object... pegging a CPU core forever.
-      setTotalGridPosition((previous) =>
-        previous.columnStart === columnStart && previous.rowStart === rowStart
-          ? previous
-          : { columnStart, rowStart }
-      );
-
-      if (totalValueRef.current) {
-        totalValueRef.current.style.display = "flex";
-      }
-    };
-
-    // Calculate on mount and when price list changes (with small delay for DOM update)
-    const timeoutId = setTimeout(calculateGridPosition, 0);
-
-    // Use ResizeObserver for accurate grid dimension tracking
-    if (!gridRef.current) return;
-
-    const resizeObserver = new ResizeObserver(() => {
-      calculateGridPosition();
-    });
-
-    resizeObserver.observe(gridRef.current);
-
-    // Also listen to window resize as fallback
-    window.addEventListener("resize", calculateGridPosition);
-
-    return () => {
-      clearTimeout(timeoutId);
-      resizeObserver.disconnect();
-      window.removeEventListener("resize", calculateGridPosition);
-    };
-  }, [priceList]);
 
   if (noScanningConfigFound) {
     return (
@@ -451,8 +398,9 @@ export default function PriceList() {
   }
 
   if (priceList) {
+    const modeLabel = GAME_MODE_LABELS[gameMode] ?? gameMode;
     return (
-      <div className="tracking-wide flex flex-col h-full">
+      <div className="tracking-wide flex flex-col h-full font-['Bender'] text-stone-200">
         <audio ref={itemScannedAudioRef} id="item-added-sound" src={ScannedSound} />
         <audio ref={itemUppedAudioRef} id="item-upped-sound" src={UppedSound} />
         <audio ref={itemExistsAudioRef} id="item-exists-sound" src={ItemExistsSound} />
@@ -507,89 +455,73 @@ export default function PriceList() {
             onMapHotkeyChange={setMapHotkey}
           />
         )}
+
+        {/* HEADER: who / which mode, and the two things you press */}
         <div
-          ref={gridRef}
-          className="grid grid-cols-[repeat(auto-fill,minmax(70px,1fr))] grid-rows-[repeat(auto-fill,minmax(30px,1fr))] font-medium tracking-wide text-base mt-1 w-full grid-flow-col grow max-h-[91vh]"
+          className={classNames(
+            "shrink-0 flex items-center gap-2 rounded border border-stone-700 bg-stone-800/70 px-2.5 py-1.5 mb-2",
+            isFrameless && "draggable"
+          )}
         >
-          {/* Settings button in top right */}
-          <div className="flex items-center justify-end" style={{
-            gridColumnStart: numCols,
-            gridRowStart: 1,
-          }}>
-            <button
-              onClick={() => setShowSettings(true)}
-              className="flex items-center justify-center hover:bg-white/20 transition-colors bg-[#444444] w-fit p-2.5 rounded"
-              
-              aria-label="Open settings"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-5 w-5 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-              </svg>
-            </button>
-            {isFrameless ? (
-              <div className="draggable relative flex items-center justify-center fill-white overflow-hidden">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" className="h-5 w-5 text-white"><path d="M96 160C96 142.3 110.3 128 128 128L512 128C529.7 128 544 142.3 544 160C544 177.7 529.7 192 512 192L128 192C110.3 192 96 177.7 96 160zM96 320C96 302.3 110.3 288 128 288L512 288C529.7 288 544 302.3 544 320C544 337.7 529.7 352 512 352L128 352C110.3 352 96 337.7 96 320zM544 480C544 497.7 529.7 512 512 512L128 512C110.3 512 96 497.7 96 480C96 462.3 110.3 448 128 448L512 448C529.7 448 544 462.3 544 480z"/></svg>
-              </div>
-            ) : null }
-          </div>
-          {/* Calculate visible cells: numCols * numRows - 4 (for Total which spans 2x2, but effectively takes 4 cells) */}
-          {shouldShowOverflow && (
-                  <div className="flex items-center max-w-full max-h-full overflow-hidden tracking-[-0.1px] odd:bg-white/10">
-                    <div className="relative flex items-center gap-1 w-full h-full">
-                      <div>
-                        <div className="px-2 font-bold cursor-pointer text-[11px] -mt-[3px] whitespace-nowrap">
-                          {priceListSorted.length - itemsToShow} items abv
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {priceListSorted.slice(shouldShowOverflow ? -itemsToShow : -availableCells).map((item, i, arr) => (
-                  <PriceListGridRow
-                    key={item.id}
-                    item={item}
-                    lastItem={i === arr.length - 1}
-                  />
-                ))}
-          <div
-            className="flex flex-col h-full justify-end items-end col-span-2 row-span-2 pl-2 select-none"
-            style={{
-              gridColumnStart: totalGridPosition.columnStart,
-              gridRowStart: totalGridPosition.rowStart,
-            }}
-            ref={totalValueRef}
-          >
-            <div className="max-w-[140px] w-[140px]">
-              <span className="uppercase text-xs font-bold">Total</span>
-              <h2 className="flex justify-center flex-col bg-white text-stone-900 px-2 rounded h-7 w-full font-['Bender']">
-                <div className="flex items-end gap-0.5">
-                  <span className="font-['Nunito'] text-sm mb-1 font-black">
-                    ₽
-                  </span>
-                  <span className="text-xl font-black tracking-wider">
-                    <NumberFlow value={totalLootValue} />
-                  </span>
-                </div>
-              </h2>
+          <img src={Logo} alt="" className="w-5 h-5 rounded-sm" draggable={false} />
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="text-[15px] font-black text-white truncate">
+              {profile.displayName ?? "ORBB ToolTip"}
+              {profile.playerLevel !== null && (
+                <span className="ml-1.5 text-[11px] font-bold text-stone-400">LVL {profile.playerLevel}</span>
+              )}
+            </div>
+            <div className="text-[10px] uppercase tracking-widest text-stone-500">
+              {modeLabel}
+              {profile.pmcFaction ? ` · ${profile.pmcFaction}` : ""}
             </div>
           </div>
+          <HeaderButton
+            title="Calibrate the tooltip scanner (F6)"
+            onClick={() => window.electron.requestCalibration()}
+          >
+            <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+              <circle cx="12" cy="12" r="7" />
+              <circle cx="12" cy="12" r="2.5" />
+              <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+            </svg>
+          </HeaderButton>
+          <HeaderButton title="Settings" onClick={() => setShowSettings(true)}>
+            <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </HeaderButton>
+        </div>
+
+        {/* SEARCH LOG */}
+        <div className="text-[11px] uppercase tracking-widest text-stone-400 font-bold px-1 mb-1 flex items-baseline">
+          Search log
+          {searchLog.length > 0 && <span className="ml-1.5 text-stone-600">{searchLog.length}</span>}
+          <span className="ml-auto text-[10px] normal-case tracking-normal font-normal text-stone-600">
+            click a row to remove it
+          </span>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-0.5 [scrollbar-width:thin] [scrollbar-color:#57534e_transparent]">
+          {searchLog.length === 0 && (
+            <div className="text-sm text-stone-500 px-1 py-2">
+              Hover an item in the game with the tooltip open and it lands here.
+            </div>
+          )}
+          {searchLog.map((item) => (
+            <SearchLogRow
+              key={item.id}
+              item={item}
+              lowest={item.id === lowestValueId}
+              showPerSlot={showPerSlotPrice}
+            />
+          ))}
+        </div>
+
+        {/* TOTALS */}
+        <div className="shrink-0 grid grid-cols-2 gap-2 mt-2 select-none">
+          <TotalBox label="Market total" value={totals.market} />
+          <TotalBox label="Trader total" value={totals.trader} />
         </div>
       </div>
     );
@@ -598,96 +530,107 @@ export default function PriceList() {
   return <div></div>;
 }
 
-function PriceListGridRow({
-  item,
-  lastItem,
+// Flea value of the whole item (lower of the two averages, like the tooltip)
+function fleaPriceOf(item: ClientItem): number {
+  if (!item.availableOnFleaMarket) return 0;
+  return Math.min(item.prices.avgDay, item.prices.latest);
+}
+
+function HeaderButton({
+  title,
+  onClick,
+  children,
 }: {
-  item: ImmutableObject<ClientItem>;
-  lastItem: boolean;
+  title: string;
+  onClick: () => void;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center max-w-full max-h-full overflow-hidden tracking-[-0.1px] odd:bg-white/10 select-none">
-      {/* <div className="h-9 w-9 flex items-center justify-center mr-1">
-        <img
-          src={item.icon}
-          className="inline max-w-full max-h-full object-contain object-center"
-        />
-      </div> */}
-      <div className="relative flex items-center gap-1 w-full h-full">
-        <div>
-          <div
-            className={classNames(
-              "px-2 font-bold cursor-pointer text-[11px] -mt-[3px] whitespace-nowrap",
-              lastItem && item.mostRecentlyAddedItem
-                ? "text-purple-500"
-                : item.mostRecentlyAddedItem
-                ? "text-green-500"
-                : lastItem
-                ? "text-red-500"
-                : ""
-            )}
-            onClick={() => {
-              removeItemFromPriceList(item as ClientItem);
-            }}
-          >
-            {item.shortName}
-          </div>
-          <div
-            className="px-0.5 cursor-pointer -mt-[12px] -mb-0.5 whitespace-nowrap h-[25px]"
-            onClick={() => {
-              removeItemFromPriceList(item as ClientItem);
-            }}
-          >
-            <span className="text-[11px]">
-              <span className="mr-1"></span>
-              <span className="font-['Nunito'] mr-px text-[9px]">₽</span>
-              {numberWithCommas(getItemsPricePerSlot(item as ClientItem))}
-            </span>
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className="shrink-0 w-8 h-8 flex items-center justify-center rounded text-stone-300 hover:text-white bg-stone-700/60 hover:bg-stone-600/80 transition-colors"
+    >
+      {children}
+    </button>
+  );
+}
 
-            {item.slots > 1 && (
-              <span className="ml-1 text-[8px] tracking-tight">per</span>
-            )}
+function TotalBox({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded border border-stone-700 bg-stone-800/70 px-2.5 py-1.5">
+      <div className="text-[10px] uppercase tracking-widest text-stone-400 font-bold">{label}</div>
+      <div className="flex items-baseline gap-0.5 text-white">
+        <span className="font-['Nunito'] text-sm font-black">₽</span>
+        <span className="text-xl font-black tracking-wider tabular-nums">
+          <NumberFlow value={value} />
+        </span>
+      </div>
+    </div>
+  );
+}
 
-            {item.count > 1 && (
-              <span className="ml-1 text-[8px] tracking-tight">
-                x {item.count}
-              </span>
-            )}
-          </div>
-        </div>
-        {/* {item.mostRecentlyAddedItem ? (
-          <>
-            <div className="flex items-center justify-around text-xs w-8 h-5 rounded bg-stone-600 font-bold">
-              <span className="ml-0.5">F3</span>
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 640 640"
-                className="fill-white"
-                width={12}
-                height={12}
-              >
-                <path d="M232.7 69.9L224 96L128 96C110.3 96 96 110.3 96 128C96 145.7 110.3 160 128 160L512 160C529.7 160 544 145.7 544 128C544 110.3 529.7 96 512 96L416 96L407.3 69.9C402.9 56.8 390.7 48 376.9 48L263.1 48C249.3 48 237.1 56.8 232.7 69.9zM512 208L128 208L149.1 531.1C150.7 556.4 171.7 576 197 576L443 576C468.3 576 489.3 556.4 490.9 531.1L512 208z" />
-              </svg>
-            </div>
-            <div className="flex items-center justify-center text-xs w-8 h-5 mr-2 rounded text-white font-bold">
-              <span>F4</span>
-              <span className="ml-px">+</span>
-            </div>
-          </>
-        ) : lastItem ? (
-          <div className="flex items-center justify-around text-xs w-8 h-5 mr-2 rounded bg-stone-600 font-bold">
-            <span className="ml-0.5">F2</span>
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 640 640"
-              className="fill-white"
-              width={12}
-              height={12}
-            >
-              <path d="M232.7 69.9L224 96L128 96C110.3 96 96 110.3 96 128C96 145.7 110.3 160 128 160L512 160C529.7 160 544 145.7 544 128C544 110.3 529.7 96 512 96L416 96L407.3 69.9C402.9 56.8 390.7 48 376.9 48L263.1 48C249.3 48 237.1 56.8 232.7 69.9zM512 208L128 208L149.1 531.1C150.7 556.4 171.7 576 197 576L443 576C468.3 576 489.3 556.4 490.9 531.1L512 208z" />
-            </svg>
-          </div>
-        ) : null} */}
+function SearchLogRow({
+  item,
+  lowest,
+  showPerSlot,
+}: {
+  item: ImmutableObject<ClientItem>;
+  lowest: boolean;
+  showPerSlot: boolean;
+}) {
+  const flea = fleaPriceOf(item as ClientItem);
+  const trader = item.prices?.trader?.price ?? 0;
+  const traderName = item.prices?.trader?.name ?? "";
+  const count = item.count > 1 ? item.count : 1;
+  const remove = () => removeItemFromPriceList(item as ClientItem);
+  return (
+    <div
+      className={classNames(
+        "rounded bg-stone-800/70 px-2.5 py-1.5 cursor-pointer hover:bg-stone-700/70 select-none",
+        item.mostRecentlyAddedItem && "ring-1 ring-green-500/60"
+      )}
+      onClick={remove}
+      title={
+        (item.mostRecentlyAddedItem ? "Last scanned (F3 removes, F4 adds one)" : lowest ? "Lowest value (F2 removes)" : "") ||
+        "Click to remove"
+      }
+    >
+      <div className="flex items-baseline gap-2 whitespace-nowrap overflow-hidden">
+        <span
+          className={classNames(
+            "text-[15px] font-black truncate",
+            item.mostRecentlyAddedItem ? "text-green-400" : lowest ? "text-red-400" : "text-white"
+          )}
+        >
+          {item.shortName}
+        </span>
+        {count > 1 && <span className="text-[11px] text-stone-400 shrink-0">x{count}</span>}
+        {showPerSlot && item.slots > 1 && (
+          <span className="ml-auto text-[11px] text-stone-500 shrink-0">
+            <span className="font-['Nunito']">₽</span>
+            {numberWithCommas(getItemsPricePerSlot(item as ClientItem))}/slot
+          </span>
+        )}
+      </div>
+      <div className="flex items-baseline gap-3 text-[12px] whitespace-nowrap">
+        <span className={item.availableOnFleaMarket ? "text-stone-200" : "text-stone-500"}>
+          <span className="text-stone-500 mr-1">Market</span>
+          {item.availableOnFleaMarket ? (
+            <>
+              <span className="font-['Nunito']">₽</span>
+              {numberWithCommas(flea * count)}
+            </>
+          ) : (
+            "n/a"
+          )}
+        </span>
+        <span className="text-stone-200">
+          <span className="text-stone-500 mr-1">{traderName || "Trader"}</span>
+          <span className="font-['Nunito']">₽</span>
+          {numberWithCommas(trader * count)}
+        </span>
       </div>
     </div>
   );

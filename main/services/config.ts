@@ -61,6 +61,7 @@ function createUserConfigFile(userDataPath: string): void {
     eftLogsPath: "",
     questScanHotkey: "]",
     mapHotkey: "[",
+    syncToTracker: true,
   };
 
   fs.writeFileSync(

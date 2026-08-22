@@ -4,7 +4,7 @@
 
 # ORBB ToolTip
 
-**Hover an item in Escape from Tarkov. See what it's worth and whether you need it. No alt-tabbing.**
+**Hover an item in Escape from Tarkov. See what it's worth and whether you need it. Press a key and your quests, progress and map are right there. No alt-tabbing.**
 
 <img src="docs/images/tooltip.png" alt="In-game tooltip for a PCB: flea price, trader price, a green quest you can do now, hideout upgrades, and a dimmed future quest" width="340">
 
@@ -16,22 +16,29 @@
 
 ## What it does
 
-Hover over any item in your stash, inventory or a container and a small overlay appears next to your cursor with:
+**Item tooltips.** Hover any item in your stash, a trader, the flea market or a raid and a small dark box appears next to the game's own tooltip with:
 
-- **Flea market price** — per slot, and total if you want it
-- **Best trader price** — and which trader
-- **Quest & hideout needs** — "1 - Gunsmith - AKS-74U", "4 - Stash 2", with a check mark when it has to be *found in raid*
+- **What the whole item sells for** — flea market average and the best trader offer (per-slot value shown small for anything bigger than 1×1)
+- **Quests and hideout upgrades that need it**, with counts
 - **Your progress** *(optional)* — link TarkovTracker and requirements you can do **right now show green**, ones locked behind later quests are dimmed "(later)", and ones you've already finished disappear
 
-Press **`'`** (apostrophe) in a raid and a **quest panel** slides in from the right — the quests you've accepted that have objectives on the map you're on, plus the ones you can do anywhere, with counts from TarkovTracker. Hold **Ctrl** and roll the wheel to scroll it from anywhere — even mid-raid while you keep moving; in menus it's click-through until you hover it, and then you can scroll it, set its opacity (slider top-right), drag it by the grip at the top, resize it from the bottom-left corner, click the map name to browse any map's quests, and click a quest to collapse it — it remembers all of that. It reads the game's own log files (the same thing TarkovMonitor does) to know which quests you've accepted or handed in, which map you loaded into, and when a raid ends — so your progress refreshes straight away.
+**Quest panel.** Press **`'`** and a Questie-style panel slides in from the right: the quests you've accepted with objectives on the map you're on, the ones you can do anywhere, and your rotating Operational tasks. White = to do, green = done, with counters ("3/5"), percent, a **READY** badge when a quest is ready to hand in, and a **K** for Kappa. Click a quest to collapse it, **middle-click** one to open its wiki page, click the map name to browse any map, drag the grip to move it, drag the bottom-left corner to resize it, slide the opacity control to taste. **Ctrl + wheel scrolls it from anywhere**, even mid-raid while the game owns your cursor; in menus just hover it and scroll normally.
 
 <div align="center"><img src="docs/images/quest-panel.png" alt="Quest panel on Customs listing active quests with objectives on this map" width="360"></div>
 
-The **Map** button at the top-left of the panel (or **`[`**) opens a floating **map window** for the map you're on: roll the wheel to zoom around the cursor, drag to pan, double-click or press *fit* to see the whole thing, drag the title bar to move it and the bottom-right corner to resize it — it remembers where you left it, and it closes and reopens together with the panel. Maps are plain images in the `maps` folder, named after the game's map id (`shoreline.png`, `bigmap.png` for Customs, `woods.png`…); Shoreline ships with the app, and [maps/README.md](maps/README.md) lists the names for the rest, so drop in whichever ones you like. The **×** next to it closes the panel.
+**Map window.** The **Map** button (or **`[`**) opens a floating, zoomable map of where you are — wheel to zoom, drag to pan, double-click to fit, move and resize it as you like, and it shares the panel's opacity and opens and closes with it. Maps are plain images you drop in the `maps` folder ([maps/README.md](maps/README.md) lists the names); Customs, Factory, Woods, Shoreline and Interchange are included.
 
-It also keeps a running **loot total** of everything you've scanned, which is handy for deciding what's worth dragging out of a raid.
+**Where your progress comes from** — three layers, merged:
 
-Prices come from [tarkov.dev](https://tarkov.dev) (community data, refreshed every 15 minutes) for **regular PvP, the seasonal PvP wipe, or PvE** — your pick. It only ever *reads pixels from your screen*; it never touches the game or its files.
+1. **The game's own logs.** The same files TarkovMonitor reads. They say which quests you've accepted, handed in or failed, which map you loaded into and when the raid ended. Instant and exact.
+2. **The Tasks screen scanner.** Press **`]`** (or click **SCANNER** at the top of the panel) on the game's Tasks screen or a trader's task list and the overlay reads it: which tasks are active, their percent, and — for the task you have open — each objective's counter and whether it carries the game's ✓. Scroll and click through your tasks; it keeps reading until you turn it off or leave the screen.
+3. **In-raid notifications.** The "Subtask completed" / "Task … is ready to be completed" toasts in the bottom-right corner are read as they appear.
+
+Everything learned is kept locally and, if you link TarkovTracker, **pushed to your tracker** too, so it stays the one source of truth across devices.
+
+**Search log.** The main window lists everything you've hovered, newest first, with its market and trader value and a running **market total** and **trader total** — handy for deciding what's worth dragging out of a raid.
+
+Prices come from [tarkov.dev](https://tarkov.dev) (community data, refreshed every 15 minutes) for **regular PvP, the seasonal PvP wipe, or PvE** — your pick. It only ever *reads pixels from your screen and your own log files*; it never touches the game, sends it input, or modifies anything.
 
 > ORBB ToolTip is a fork of [sammereye/flea-tooltip](https://github.com/sammereye/flea-tooltip) (FleaTooltip), revived after its price source went offline in July 2026 and extended from there. As with any overlay, use it at your own discretion regarding BSG's terms of service.
 
@@ -51,7 +58,7 @@ In Tarkov's graphics settings set **Screen mode → Borderless**. Overlays can't
 
 ### 3. Turn on the overlay
 
-Click the ⚙ gear in the top-right of the ORBB window and switch on **Enable Tooltips** and **Always On Top**.
+Click the ⚙ in the top-right of the ORBB window and switch on **Enable Tooltips** and **Always On Top**.
 
 <img src="docs/images/settings-general.png" alt="Settings: Enable Tooltips and Always On Top switched on" width="600">
 
@@ -61,12 +68,12 @@ Further down, choose the flea market you actually play on — **PvP**, **Season 
 
 <img src="docs/images/settings-gamemode.png" alt="Game mode selector" width="600">
 
-### 5. Calibrate once (F6)
+### 5. Calibrate once
 
 The scanner needs to learn where Tarkov draws its item tooltip on your resolution.
 
 1. In Tarkov, open your **stash** and hover an item so the game's own little name-tooltip is showing.
-2. Press **F6**. The ORBB window says *"Screen Configuration Started"*.
+2. Press **F6** (or the ◎ button next to the gear). The ORBB window says *"Screen Configuration Started"*.
 3. With the mouse still on that item (tooltip visible), press **F6 again** — then **don't move the mouse** while it scans.
 4. When it says *"Configuration Complete"*, restart ORBB ToolTip.
 
@@ -76,36 +83,27 @@ That's it. Hover things and prices appear.
 
 ## Quest tracking with TarkovTracker *(optional, recommended)*
 
-Out of the box, tooltips list every quest and hideout upgrade an item is used for. Link a free [TarkovTracker](https://tarkovtracker.org) account and they become *yours*: completed quests drop off, doable ones turn green, future ones dim.
+Without a TarkovTracker token the app already knows what you've accepted and handed in from the game's logs. Linking the tracker adds per-objective progress, level and faction, keeps several devices in sync, and lets ORBB push what it learns back.
 
 ### Create a token
 
-1. Sign in at **[tarkovtracker.org](https://tarkovtracker.org)** and pick the same game mode you play (PvP / Seasonal PvP / PvE — progress is tracked per mode).
-2. Go to **Settings → API Tokens → Create a token**. Give it **Get progression** *and* **Write progression** permission (the write permission is for TarkovMonitor below).
-3. Copy it with the **copy button** — part of the displayed token is masked with asterisks, so don't select it by hand.
+1. Sign in at [tarkovtracker.org](https://tarkovtracker.org) (free).
+2. Open **Settings → API Tokens**, give it a name, tick **Get Progression** *and* **Write Progression** (so ORBB can push hand-ins and scanned progress; leave the second one off if you'd rather it didn't), create it and copy it.
+3. On the same page make sure your tracker is on the same **game mode** as the app — season, PvP and PvE have separate progress there.
 
 ### Paste it into ORBB ToolTip
 
-Open ⚙ → **TarkovTracker Sync**, paste the token and press ✓. It confirms *"Connected as &lt;name&gt; (Level N)"* and warns you if the token's mode doesn't match your Game Mode setting.
+⚙ → **TarkovTracker Sync** → paste → ✓. The header of the main window shows the tracker's display name, level and faction once it's connected.
 
 <img src="docs/images/settings-tracker.png" alt="TarkovTracker Sync settings with a connected token" width="600">
 
 ### Keep it in sync automatically with TarkovMonitor
 
-TarkovTracker only knows what it's told. Rather than ticking off quests by hand, run **[TarkovMonitor](https://github.com/the-hideout/TarkovMonitor)** — a small companion app from the tarkov.dev team that reads the game's log files and marks quests complete on TarkovTracker as you play.
-
-1. Download `TarkovMonitor.zip` from its [releases page](https://github.com/the-hideout/TarkovMonitor/releases), unzip and run it.
-2. In its **Settings**, paste the same TarkovTracker token and click **Test Token**.
-3. **Catch up on past progress:** still in Settings, scroll to *Initial Setup* → **Read Past Logs**, pick the breakpoint matching the start of your current wipe, and let it replay your logs. This back-fills everything you completed before installing it.
-4. Leave TarkovMonitor running while you play. ORBB ToolTip re-reads your progress about 20 seconds after every raid ends (and every 15 minutes otherwise), so the quest panel and tooltips are current by the time you're back in your stash.
+[TarkovMonitor](https://github.com/the-hideout/TarkovMonitor) watches Tarkov's log files and marks quests complete on TarkovTracker the moment you hand them in. Install it, paste the same token into its settings, leave it running next to the game. ORBB reads the same logs itself, so the overlay is live either way; TarkovMonitor keeps the tracker up to date for everything else (hideout, level).
 
 ### Exact progress: scan the Tasks screen
 
-Trackers only learn about *completed* objectives, so a kill counter sits at 0/5 until it's done. The game's own **Tasks** screen has the real numbers — open it and press **`]`** to start a ~45-second catch-up: ORBB keeps reading the screen every couple of seconds while **you scroll the list and click through your tasks**, picking up each task's percentage, the exact `3/5` counts of whichever task is selected, and the rotating **Operational** daily/weekly tasks that no database lists. It never sends input to the game. Everything is remembered between scans.
-
-**In a raid**, the bottom-right notifications ("Subtask completed: Eagle Eye", "Task The Cult is ready to be completed") are read as they appear, so the panel shows **READY** or a ✓ the moment it happens — confirmed properly by TarkovTracker after the raid.
-
-> **Where are my logs?** The quest panel reads Tarkov's logs from `C:\Battlestate Games\Escape from Tarkov\Logs` by default. If your game lives elsewhere, set the folder in ⚙ → Quest Panel.
+Counters like "3/5" and ticks inside a quest aren't in the logs — they're read off the screen. Open the game's **Tasks** screen (or a trader's task list), press **`]`** or click **SCANNER** at the top of the panel, and the status line turns amber: *"Reading the Tasks screen…"*. Scroll through your list and click the quests you care about; each one you open is read within a second or two. Click SCANNER again (or just leave the screen) to stop.
 
 ---
 
@@ -114,13 +112,15 @@ Trackers only learn about *completed* objectives, so a kill counter sits at 0/5 
 | Key | What it does |
 | --- | --- |
 | **F1** | Show / hide the ORBB window |
-| **F2** | Remove the lowest-value item from the loot list |
+| **F2** | Remove the lowest-value item from the search log |
 | **F3** | Remove the last scanned item |
 | **F4** | Add one to the last scanned item's count |
 | **F6** | Screen calibration |
 | **`'`** | Slide the quest panel in / out (changeable in settings) |
 | **`[`** | Show / hide the map window (changeable) |
-| **`]`** | Start / stop reading progress off the game's Tasks screen (changeable) |
+| **`]`** | Start / stop reading the game's Tasks screen (changeable) |
+| **Ctrl + wheel** | Scroll the quest panel from anywhere while it's open |
+| **Middle-click a quest** | Open its page on the wiki |
 | **F12** | Developer tools |
 
 Each hotkey can be switched off in settings if it clashes with something.
@@ -132,33 +132,41 @@ Each hotkey can be switched off in settings if it clashes with something.
 **Nothing appears when I hover.**
 Borderless mode (step 2), tooltips enabled (step 3), calibration done (step 5) — in that order. Hover long enough for the *game's* tooltip to fully appear; that's what gets read.
 
-**It works everywhere except near the right edge of the screen.**
-Fixed in the current build — update. (The game shifts its tooltip left near the edge; older scanners only looked in one place.)
-
 **Some items scan, some don't.**
 The scanner finds the game's tooltip by its border colour. If BSG changes the UI, adjust the RGB border colour in settings (defaults: 82 / 89 / 90). Unmatched reads are written to the log file — find it via `%APPDATA%\tarkov-price-tooltip\logs\main.log` and open an issue with the line.
 
+**The panel says a quest is on a map it isn't, or lists one I don't have.**
+The panel shows what the game's logs say you've accepted. If you've never played with logging on this PC, scan the Tasks screen once and the active list fills in from that instead. Rows the scanner can't match to any known quest are shown under *Operational* only if they look like real names; if junk ever gets through, a later scan of the same screen replaces it.
+
+**A finished objective stays white.**
+Open the quest on the Tasks screen with the scanner on so it can see the ✓. The tick is detected by colour; if your game uses an unusual UI colour scheme, tell us.
+
 **"Token rejected".**
-Make sure the token came from **tarkovtracker.org** (not the old tarkovtracker.io — those still work, but the site is legacy), was copied with the copy button, and has *Get progression* permission.
+Make sure the token came from **tarkovtracker.org** (not the old tarkovtracker.io — those still work, but the site is legacy), was copied with the copy button, and has *Get progression* permission. Pushing progress additionally needs *Write progression*; without it the app logs one warning and keeps working read-only.
 
 **"Fetching Items from Database Failed".**
 tarkov.dev is temporarily unreachable. The app retries every minute on its own; nothing to do.
+
+**Hover or Ctrl + wheel stopped working mid-session.**
+Both heal themselves within a few seconds (Windows silently drops the low-level hooks they rely on when a process is slow; the app now re-arms them). If it ever sticks, `'` twice re-opens the panel fresh.
 
 ---
 
 ## Is it heavy?
 
-No. Measured idle while the game runs: the whole thing uses about **2% of one CPU core** and ~500 MB of RAM (Electron's floor). The scanner polls your cursor every 25 ms and backs off to 100 ms when nothing's happening, the log watcher checks one file's size every 2 seconds, and the quest panel and map windows don't exist on screen until you open them. In a raid it also glances at the bottom-right corner every 2 seconds for the game's "Subtask completed" notifications, but it strips that strip down to its bright pixels first and skips OCR entirely when there's nothing there, so that costs well under 2% too.
+No. Measured while the game runs: about **2% of one CPU core** in a raid and ~500 MB of RAM (Electron's floor). The scanner polls your cursor every 25 ms and backs off to 100 ms when nothing's happening, the log watcher checks one file's size every 2 seconds, the toast reader strips the corner of the screen down to bright pixels and skips OCR entirely when there's nothing there, and the panel and map windows don't exist on screen until you open them. The Tasks-screen scanner is the one thing that costs real CPU — about a core while the screen is changing — and it only runs while you've turned it on, skipping the OCR completely while the screen stays the same.
 
 ---
 
 ## How it works
 
-1. A small native helper (`ocr_cpp.exe`, Tesseract OCR) watches the screen around your cursor for the game's tooltip border and reads the item name.
+1. A small native helper (`ocr_cpp.exe`, Tesseract OCR) watches the screen around your cursor for the game's tooltip border and reads the item name. It also hosts the Ctrl + wheel hook and the screen reads below.
 2. The Electron main process matches that name against a fuzzy index of all ~5,300 items and looks up prices, quest and hideout requirements (from `json.tarkov.dev`) and your TarkovTracker progress.
-3. A transparent always-on-top window draws the tooltip beside your cursor.
+3. A transparent always-on-top window draws the tooltip beside your cursor; two more draw the quest panel and the map.
 
-**The Tasks-screen scan (`]`)** works the same way, just on the whole screen: for up to ~45 seconds it OCRs everything every 2 seconds. `]` (or the scanner box at the top of the quest panel) toggles it on and off, and that box always shows whether the scanner is running, how long is left and how many tasks it has read. From each pass it picks out task rows (name · map · status · percent), the open task's objective rows (text, "3/5" counters, and whether the game's cyan tick follows the text), and matches them against the quest catalog, tolerating the stray letters OCR makes of the icons. Only what's on screen can be read, so scroll the list and click through the quests you care about. Everything it learns is kept in `task-scan.json` and merged with TarkovTracker and the game's own logs.
+**The Tasks-screen scanner** OCRs the whole screen, rebuilds rows from word positions and picks out task rows (name · map · status · percent — or just name · status on a trader's list), and the open task's objective rows: text, "3/5" counters, and the number of tick-coloured pixels after the text, which is how it knows an objective is done. Names are matched to the quest catalog tolerating the stray letters OCR makes of the icons; the objective rows are assigned to whichever active task they fit best. Only what's on screen can be read, so scroll and click through.
+
+**Progress flow:** game logs → accepted / handed in / failed; Tasks screen → counters, ticks, percent; in-raid toasts → subtask done / ready to hand in. All of it is merged in the panel and (if enabled) pushed to TarkovTracker as completions and counters only — it never marks anything *un*-done on the tracker, so a missed read can't undo real progress. Writes are sent only when something is new and batched, because the tracker has a daily write quota.
 
 ---
 
@@ -188,6 +196,6 @@ The build drops the exe and its runtime DLLs into `lib/ocr/`.
 
 ## Credits & licenses
 
-Original app by [sammereye](https://github.com/sammereye/flea-tooltip). Item, price, quest and hideout data by the [tarkov.dev](https://tarkov.dev) project; progress tracking by [TarkovTracker](https://tarkovtracker.org) and [TarkovMonitor](https://github.com/the-hideout/TarkovMonitor). OCR by [Tesseract](https://github.com/tesseract-ocr/tesseract). Bundled third-party libraries are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MIT licensed.
+Original app by [sammereye](https://github.com/sammereye/flea-tooltip). Item, price, quest and hideout data by the [tarkov.dev](https://tarkov.dev) project; progress tracking by [TarkovTracker](https://tarkovtracker.org) and [TarkovMonitor](https://github.com/the-hideout/TarkovMonitor); quest pages by the [Escape from Tarkov Wiki](https://escapefromtarkov.fandom.com). OCR by [Tesseract](https://github.com/tesseract-ocr/tesseract). Bundled third-party libraries are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). MIT licensed.
 
 Escape from Tarkov is a trademark of Battlestate Games. This is an unofficial fan project, not affiliated with or endorsed by BSG.

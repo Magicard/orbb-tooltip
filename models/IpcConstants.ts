@@ -41,6 +41,9 @@ export default class IpcConstants {
   static QuestPanelScroll = "quest-panel-scroll";
   static QuestPanelOpacity = "quest-panel-opacity";
   static QuestPanelScanStatus = "quest-panel-scan-status";
+  static OpenExternal = "open-external";
+  static ProfileInfo = "profile-info";
+  static RequestScreenCalibration = "request-screen-calibration";
   static QuestPanelScanStatusRequest = "quest-panel-scan-status-request";
   static QuestPanelToggleScan = "quest-panel-toggle-scan";
   static QuestPanelClose = "quest-panel-close";

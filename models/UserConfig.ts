@@ -27,6 +27,7 @@ export type UserConfig = {
   enableAlwaysOnTop?: boolean;
   tarkovMarketApiKey?: string;
   tarkovTrackerApiToken?: string;
+  syncToTracker?: boolean; // push scanned / logged progress to TarkovTracker (default on)
   lowestAcceptableScore?: number;
   borderColorRed?: number; // 0-255
   borderColorGreen?: number; // 0-255

@@ -8,6 +8,7 @@ import {
   protocol,
   screen,
   session,
+  shell,
   Tray,
 } from "electron";
 import { pathToFileURL } from "url";
@@ -34,6 +35,7 @@ import QuestPanelWindow from "../models/QuestPanelWindow";
 import GameLogWatcher from "../models/GameLogWatcher";
 import TaskScan from "../models/TaskScan";
 import MapWindow from "../models/MapWindow";
+import TrackerSync from "../models/TrackerSync";
 
 // Hotkey registration functions
 function registerHotkeys(userConfig: UserConfig) {
@@ -81,10 +83,9 @@ function registerHotkeys(userConfig: UserConfig) {
     });
   }
 
-  // F6 - Screen Calibration
-  if (userConfig.enableScreenCalibration !== false) {
-    // Default to true if not set
-    globalShortcut.register("F6", () => {
+  // F6 - Screen Calibration (the Calibrate button in the app runs the same
+  // steps, see RequestScreenCalibration)
+  screenCalibrationStep = () => {
       console.log("On step ", screenConfigureStep);
       if (!BrowserWindow.getAllWindows()[0].isVisible()) {
         BrowserWindow.getAllWindows()[0].show();
@@ -212,7 +213,10 @@ function registerHotkeys(userConfig: UserConfig) {
         screenConfigureStep = 3;
         screenConfigureProcess.stdin.write("NEXT\n");
       }
-    });
+  };
+  if (userConfig.enableScreenCalibration !== false) {
+    // Default to true if not set
+    globalShortcut.register("F6", () => screenCalibrationStep?.());
   }
 
   // F12 - Dev Tools (always registered)
@@ -235,6 +239,8 @@ declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
 
 // Global variables for screen configuration
 let screenConfigureStep: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 = 0;
+// Runs one step of the screen calibration (F6 / the Calibrate button in the app)
+let screenCalibrationStep: (() => void) | null = null;
 let screenConfigureProcess: ChildProcessWithoutNullStreams | null = null;
 
 try {
@@ -251,6 +257,32 @@ try {
   // Map the user picked in the panel; cleared when a new raid starts
   let questPanelMapOverride: string | null = null;
   let taskScan: TaskScan | null = null;
+  let trackerSync: TrackerSync | null = null;
+
+  // Pushes progress to TarkovTracker unless the token / setting say no
+  const getTrackerSync = (): TrackerSync => {
+    if (!trackerSync) {
+      trackerSync = new TrackerSync(app.getPath("userData"));
+      trackerSync.onStatus = (status) => {
+        if (status.lastError) log.warn(`TarkovTracker sync: ${status.lastError}`);
+      };
+    }
+    const config = getUserConfigData();
+    trackerSync.configure(config.tarkovTrackerApiToken ?? null, config.syncToTracker !== false);
+    return trackerSync;
+  };
+
+  // What the tracker already knows, so nothing it has is sent again
+  const trackerHasTask = (taskId: string, state: "completed" | "failed"): boolean => {
+    const progress = items.taskData.getLastProgress();
+    if (!progress) return false;
+    return state === "completed"
+      ? progress.completedTaskIds.has(taskId)
+      : progress.failedTaskIds.has(taskId);
+  };
+  const trackerObjective = (objectiveId: string) =>
+    items.taskData.getLastProgress()?.objectiveProgress.get(objectiveId);
+
   let questScanHotkey: string | null = null;
   let scanInProgress = false;
   let scanSessionUntil = 0;
@@ -391,6 +423,12 @@ try {
             taskScan
           );
           data.mapOverride = !!questPanelMapOverride;
+          const progress = items.taskData.getLastProgress();
+          (await mainWindow).webContents.send(IpcConstants.ProfileInfo, {
+            displayName: progress?.displayName ?? null,
+            playerLevel: progress?.playerLevel ?? null,
+            pmcFaction: progress?.pmcFaction ?? null,
+          });
           const imageUrl = findMapImage(data.mapNameId, data.mapName);
           data.hasMapImage = !!imageUrl;
           questPanel?.sendData(data);
@@ -444,7 +482,18 @@ try {
       // Accepting / handing in a quest in the menu shows up immediately,
       // in the panel and in item tooltips
       gameLog.on("quest-events", () => {
-        void items.setQuestEvents(gameLog!.getQuestEvents());
+        const events = gameLog!.getQuestEvents();
+        void items.setQuestEvents(events);
+        // The logs are the truth for hand-ins and failures: tell the tracker
+        // (once we know what it already has - otherwise the startup replay
+        // would resend every quest ever finished)
+        const sync = getTrackerSync();
+        const known = items.taskData.getLastProgress();
+        for (const [taskId, event] of known ? events : []) {
+          const state =
+            event.status === "finished" ? "completed" : event.status === "failed" ? "failed" : null;
+          if (state && !trackerHasTask(taskId, state)) sync.queueTask(taskId, state);
+        }
         pushQuestPanelData();
       });
       gameLog.on("raid-ended", () => {
@@ -474,11 +523,13 @@ try {
         const config = getUserConfigData();
         const mode = getGameMode(config);
         const [tsv, catalog, maps] = await Promise.all([
-          ocr.requestScreenScan(),
+          ocr.requestScreenScan(undefined, undefined, [], true),
           items.taskData.loadTaskCatalog(mode),
           items.taskData.loadMaps(mode),
         ]);
+        if (tsv.trim() === "UNCHANGED") return -1;
         if (!taskScan) taskScan = new TaskScan(app.getPath("userData"));
+        const passStartedAt = Date.now();
         const activeIds = [...(gameLog?.getQuestEvents() ?? new Map()).entries()]
           .filter(([, e]) => e.status === "started")
           .map(([id]) => id);
@@ -488,6 +539,20 @@ try {
           maps.map((m) => m.name),
           activeIds
         );
+        // Hand what this pass read to TarkovTracker (completions and
+        // counters only - see TrackerSync)
+        const sync = getTrackerSync();
+        for (const state of taskScan.statesSince(passStartedAt)) {
+          if (!state.objectiveId) continue;
+          const known = trackerObjective(state.objectiveId);
+          sync.queueObjective(state.objectiveId, {
+            state: state.done && !known?.complete ? "completed" : undefined,
+            count:
+              typeof state.count === "number" && state.count > (known?.count ?? 0)
+                ? state.count
+                : undefined,
+          });
+        }
         pushQuestPanelData();
         return result.tasks + result.objectives;
       } catch (error) {
@@ -501,9 +566,14 @@ try {
     // The scan hotkey starts a catch-up session: while the Tasks screen is
     // open, keep reading it every couple of seconds as the player scrolls
     // and clicks through their list (no input is ever sent to the game)
-    const SCAN_SESSION_MS = 45 * 1000;
+    // A scan session runs passes back to back (the helper skips the OCR
+    // while the screen has not changed, so idling on the Tasks screen is
+    // free) until it is toggled off, it has seen no task rows for a while,
+    // or this much time has passed
+    const SCAN_SESSION_MS = 3 * 60 * 1000;
     let scanSessionPasses = 0;
-    const SCAN_SESSION_INTERVAL_MS = 2000;
+    const SCAN_SESSION_INTERVAL_MS = 400;
+    const SCAN_SESSION_MAX_EMPTY_PASSES = 12;
     // The scan hotkey / panel chip toggles the session
     function toggleScanSession() {
       if (scanSessionTimer) stopScanSession();
@@ -543,12 +613,22 @@ try {
       scanSessionPasses = 0;
       log.info("Tasks screen scan session started");
       sendScanStatus(true);
+      let lastPassFound = 1;
       const tick = async () => {
         const found = await scanTasksScreenOnce();
-        scanSessionPasses++;
-        scanSessionEmptyRuns = found > 0 ? 0 : scanSessionEmptyRuns + 1;
+        // -1 = screen unchanged: nothing new to learn; it only counts as an
+        // empty pass when the last real read was empty too (the player has
+        // left the Tasks screen and is sitting still somewhere else)
+        if (found >= 0) {
+          scanSessionPasses++;
+          lastPassFound = found;
+          scanSessionEmptyRuns = found > 0 ? 0 : scanSessionEmptyRuns + 1;
+        } else if (lastPassFound === 0) {
+          scanSessionEmptyRuns++;
+        }
         const done =
-          Date.now() >= scanSessionUntil || scanSessionEmptyRuns >= 4;
+          Date.now() >= scanSessionUntil ||
+          scanSessionEmptyRuns >= SCAN_SESSION_MAX_EMPTY_PASSES;
         if (done) {
           scanSessionTimer = null;
           log.info("Tasks screen scan session ended");
@@ -618,6 +698,19 @@ try {
         const knownNames = [...taskScan.getTasks().values()].map((t) => t.name);
         const events = taskScan.applyToastTsv(tsv, catalog, knownNames);
         if (events.length) {
+          const sync = getTrackerSync();
+          for (const event of events) {
+            if (event.kind !== "ready" || !event.taskId) continue;
+            // Only for a quest the logs confirm is active: a misread toast
+            // must not complete objectives on the tracker
+            if (gameLog?.getQuestEvents().get(event.taskId)?.status !== "started") continue;
+            const task = catalog.find((t) => t.id === event.taskId);
+            for (const objective of task?.objectives ?? []) {
+              if (!trackerObjective(objective.id)?.complete) {
+                sync.queueObjective(objective.id, { state: "completed" });
+              }
+            }
+          }
           pushQuestPanelData();
         } else if (/\b(task|subtask|completed|ready)\b/i.test(tsv)) {
           const words = tsv
@@ -964,8 +1057,29 @@ try {
       }
     );
 
+    // Keep the overlay windows' hover detection alive (see forwardingCycle)
+    setInterval(() => {
+      const overlays = [questPanel, mapWindow].filter(
+        (w): w is NonNullable<typeof w> => !!w && !w.isDestroyed()
+      );
+      for (const w of overlays) w.forwardingCycle("drop");
+      for (const w of overlays) w.forwardingCycle("arm");
+    }, 3000);
+
     // Quest panel buttons
     ipcMain.on(IpcConstants.QuestPanelToggleScan, () => toggleScanSession());
+    ipcMain.on(IpcConstants.RequestScreenCalibration, () => screenCalibrationStep?.());
+
+    // Middle-click on a quest opens its wiki page in the default browser;
+    // only wiki pages, nothing else a renderer might ask for
+    ipcMain.on(IpcConstants.OpenExternal, (_event, url: string) => {
+      if (
+        typeof url === "string" &&
+        /^https:\/\/escapefromtarkov\.fandom\.com\/wiki\/[^\s]+$/.test(url)
+      ) {
+        void shell.openExternal(url);
+      }
+    });
     ipcMain.on(IpcConstants.QuestPanelScanStatusRequest, () =>
       sendScanStatus(!!scanSessionTimer)
     );
@@ -1086,6 +1200,12 @@ try {
       (_event, userConfig: UserConfig) => {
         const previous = getUserConfigData();
         setUserConfigData(userConfig);
+        if (
+          (userConfig.tarkovTrackerApiToken ?? "") !== (previous.tarkovTrackerApiToken ?? "") ||
+          (userConfig.syncToTracker !== false) !== (previous.syncToTracker !== false)
+        ) {
+          getTrackerSync();
+        }
 
         // Apply quest-panel settings live
         if (userConfig.enableQuestPanel === false) {

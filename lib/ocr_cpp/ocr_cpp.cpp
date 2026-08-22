@@ -512,7 +512,7 @@ static std::string annotateTicks(const std::string& tsv, PIX* pix) {
 			if (ok) {
 				// From the word's own box (the tick may have been read as a word
 				// itself) to well past its right edge
-				const int x0 = (std::max)(0, cols[6] - 2), x1 = (std::min)(w, cols[6] + cols[8] + 120);
+				const int x0 = (std::max)(0, cols[6] - 2), x1 = (std::min)(w, cols[6] + cols[8] + 60);
 				const int y0 = (std::max)(0, cols[7] - 2), y1 = (std::min)(h, cols[7] + cols[9] + 2);
 				int ticks = 0;
 				for (int y = y0; y < y1; y++) {
@@ -558,12 +558,45 @@ static std::string ocrToast(tesseract::TessBaseAPI& tess, PIX* pix, const std::s
 	return result;
 }
 
+// Coarse sample of a capture (every 7th row, every 11th column). A repeated
+// full-screen scan compares it with the previous one and calls the screen
+// unchanged unless more than 0.5% of the samples moved by a visible amount,
+// so a ticking clock or a blinking cursor does not trigger another OCR.
+static std::vector<l_uint32> g_lastScreenSamples;
+
+static bool screenUnchanged(PIX* pix) {
+	if (!pix || pixGetDepth(pix) != 32) return false;
+	const l_int32 w = pixGetWidth(pix), h = pixGetHeight(pix), wpl = pixGetWpl(pix);
+	const l_uint32* data = pixGetData(pix);
+	std::vector<l_uint32> samples;
+	samples.reserve((size_t)(h / 7 + 1) * (size_t)(w / 11 + 1));
+	for (l_int32 y = 0; y < h; y += 7) {
+		const l_uint32* row = data + (size_t)y * wpl;
+		for (l_int32 x = 0; x < w; x += 11) samples.push_back(row[x]);
+	}
+	bool same = false;
+	if (g_lastScreenSamples.size() == samples.size()) {
+		const size_t allowed = samples.size() / 200;
+		size_t differing = 0;
+		for (size_t i = 0; i < samples.size(); i++) {
+			l_int32 r1, g1, b1, r2, g2, b2;
+			extractRGBValues(samples[i], &r1, &g1, &b1);
+			extractRGBValues(g_lastScreenSamples[i], &r2, &g2, &b2);
+			if (abs(r1 - r2) + abs(g1 - g2) + abs(b1 - b2) > 48 && ++differing > allowed) break;
+		}
+		same = differing <= allowed;
+	}
+	g_lastScreenSamples.swap(samples);
+	return same;
+}
+static const char* UNCHANGED_PAGE = "UNCHANGED";
+
 // OCR a screen region (or the whole primary screen). A partial region is the
 // in-raid notification strip: it is reduced to its bright pixels first and
 // skipped entirely when there is nothing bright, so the 2s polling costs next
 // to nothing while nothing is on screen. Excluded rectangles (our own overlay
 // windows) are blacked out so their text is never read as a notification.
-static std::string scanScreenRegion(tesseract::TessBaseAPI& tess, int x, int y, int w, int h, const std::string& dumpPath = std::string(), const std::vector<ScreenRect>& exclude = std::vector<ScreenRect>()) {
+static std::string scanScreenRegion(tesseract::TessBaseAPI& tess, int x, int y, int w, int h, const std::string& dumpPath = std::string(), const std::vector<ScreenRect>& exclude = std::vector<ScreenRect>(), bool onlyIfChanged = false) {
 	std::string result;
 	if (!cachedDesktopDC) return result;
 
@@ -597,6 +630,14 @@ static std::string scanScreenRegion(tesseract::TessBaseAPI& tess, int x, int y, 
 	}
 
 	if (fullScreen) {
+		// "SCAN IFCHANGED": skip the (expensive) OCR while the screen is the
+		// same as last time, so a running scan session costs nothing while
+		// the player just reads
+		const bool unchanged = screenUnchanged(pix);
+		if (onlyIfChanged && unchanged) {
+			pixDestroy(&pix);
+			return UNCHANGED_PAGE;
+		}
 		result = annotateTicks(ocrPage(tess, pix, 1.0f, PAGE_OCR_DEADLINE_MS), pix);
 	}
 	else {
@@ -768,7 +809,7 @@ int main(int argc, char* argv[])
 			else if (command == "WHEELHOOK OFF") {
 				g_wheelHookEnabled.store(false);
 			}
-			else if (command == "SCAN" || command.rfind("SCANREGION ", 0) == 0 || command.rfind("SCANFILE ", 0) == 0 || command.rfind("SCANTOAST ", 0) == 0) {
+			else if (command == "SCAN" || command == "SCAN IFCHANGED" || command.rfind("SCANREGION ", 0) == 0 || command.rfind("SCANFILE ", 0) == 0 || command.rfind("SCANTOAST ", 0) == 0) {
 				std::string page;
 				if (command.rfind("SCANTOAST ", 0) == 0) {
 					page = scanImageFile(tess, command.substr(10), 1.0f, true);
@@ -784,7 +825,8 @@ int main(int argc, char* argv[])
 					int rx = 0, ry = 0, rw = 0, rh = 0;
 					std::string dumpPath;
 					std::vector<ScreenRect> exclude;
-					if (command != "SCAN") {
+					const bool onlyIfChanged = command == "SCAN IFCHANGED";
+					if (command != "SCAN" && !onlyIfChanged) {
 						// "SCANREGION x y w h [EXCLUDE x y w h]... [DUMP <path>]"
 						sscanf_s(command.c_str() + 11, "%d %d %d %d", &rx, &ry, &rw, &rh);
 						size_t dumpAt = command.find(" DUMP ");
@@ -798,7 +840,7 @@ int main(int argc, char* argv[])
 							at = command.find(" EXCLUDE ", at + 9);
 						}
 					}
-					page = scanScreenRegion(tess, rx, ry, rw, rh, dumpPath, exclude);
+					page = scanScreenRegion(tess, rx, ry, rw, rh, dumpPath, exclude, onlyIfChanged);
 				}
 				std::lock_guard<std::mutex> lock(g_stdoutMutex);
 				cout << "SCANRESULT_BEGIN" << endl;

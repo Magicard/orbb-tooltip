@@ -14,7 +14,7 @@ export type ScannedTask = {
   key: string; // normalized name
   name: string; // as read from the screen
   taskId: string | null; // catalog match, if any
-  percent: number;
+  percent: number | null; // null when the screen showed no progress bar
   status: string;
   location: string;
   at: number;
@@ -41,6 +41,7 @@ export type ScannedObjective = {
 export type ScannedObjectiveState = {
   key: string; // "<taskId>|<normalized objective text>"
   taskId: string;
+  objectiveId?: string;
   text: string;
   done: boolean;
   // Counter shown on the row ("3/5"), when it has one
@@ -198,13 +199,18 @@ export default class TaskScan {
     return this.stateFor(taskId, objectiveText)?.done;
   }
 
+  // Objective states written at or after a moment (what a scan pass found)
+  statesSince(at: number): ScannedObjectiveState[] {
+    return [...this.objectiveStates.values()].filter((s) => s.at >= at);
+  }
+
   stateFor(taskId: string, objectiveText: string): ScannedObjectiveState | undefined {
     return this.objectiveStates.get(`${taskId}|${normalizeName(objectiveText)}`);
   }
 
   percentFor(taskId: string): number | undefined {
     for (const t of this.tasks.values()) {
-      if (t.taskId === taskId) return t.percent;
+      if (t.taskId === taskId && t.percent !== null) return t.percent;
     }
     return undefined;
   }
@@ -279,7 +285,11 @@ export default class TaskScan {
       }
 
       // ---- objective row without a counter: "<text>" or "<text> [tick]" ----
-      if (row.length >= 4 && !texts.some((t) => PERCENT_PATTERN.test(t))) {
+      if (
+        row.length >= 4 &&
+        !texts.some((t) => PERCENT_PATTERN.test(t)) &&
+        !texts.slice(-2).some((t) => STATUS_PATTERN.test(t))
+      ) {
         // The row starts with an icon and may end with the tick itself,
         // both of which OCR turns into a stray short token
         const trimmed = stripStrayTokens(row, (w) => w.text);
@@ -291,18 +301,34 @@ export default class TaskScan {
         }
       }
 
-      // ---- task row: "<name> <location> <status> <percent>" ----
-      const percentIdx = texts.findIndex((t) => PERCENT_PATTERN.test(t));
-      if (percentIdx < 2) continue;
+      // ---- task row: "<name> <location> <status> <percent>" (character
+      // Tasks screen) or "<name> [location] <status>" (trader's task list,
+      // which shows no progress bar) ----
+      let percentIdx = texts.findIndex((t) => PERCENT_PATTERN.test(t));
+      let percent: number | null = null;
+      // Operational rows on the trader screen end with a countdown, and the
+      // trader's task header ends with a loyalty icon read as a stray letter
+      let tail = texts.length;
+      while (
+        tail > 2 &&
+        (/^\d{1,2}:\d{2}(:\d{2})?$/.test(texts[tail - 1]) || STRAY_TOKEN.test(texts[tail - 1]))
+      ) {
+        tail--;
+      }
+      if (percentIdx >= 2) {
+        percent = Number(PERCENT_PATTERN.exec(texts[percentIdx])![1]);
+        if (!(percent >= 0 && percent <= 100)) continue;
+      } else if (percentIdx < 0 && tail >= 2 && tail <= 10 && STATUS_PATTERN.test(texts[tail - 1])) {
+        percentIdx = tail;
+      } else {
+        continue;
+      }
       const statusIdx = texts
         .slice(0, percentIdx)
         .map((t, i) => (STATUS_PATTERN.test(t) ? i : -1))
         .filter((i) => i >= 0)
         .pop();
       if (statusIdx === undefined || statusIdx < 1) continue;
-
-      const percent = Number(PERCENT_PATTERN.exec(texts[percentIdx])![1]);
-      if (!(percent >= 0 && percent <= 100)) continue;
       const status = texts[statusIdx];
 
       // Location is the longest trailing run of words before the status
@@ -312,7 +338,7 @@ export default class TaskScan {
       // Narrowest match first so "[Season PvP] Any location" keeps the tag
       // with the task name
       for (let start = statusIdx - 1; start >= Math.max(0, statusIdx - 4); start--) {
-        const found = locations.get(wordSetKey(texts.slice(start, statusIdx).join(" ")));
+        const found = lookupLocation(locations, texts.slice(start, statusIdx).join(" "));
         if (found) {
           location = found;
           nameEnd = start;
@@ -342,7 +368,8 @@ export default class TaskScan {
         key,
         name: resolved.name,
         taskId: resolved.taskId,
-        percent,
+        // A screen without a progress bar must not forget a percent we have
+        percent: percent ?? this.tasks.get(key)?.percent ?? null,
         status,
         location,
         at: now,
@@ -427,6 +454,7 @@ export default class TaskScan {
       this.objectiveStates.set(key, {
         key,
         taskId: best.task.id,
+        objectiveId: objective.id,
         text: objective.text,
         done: row.done,
         count: row.count,
@@ -586,6 +614,19 @@ function wordSetKey(text: string): string {
   return normalizeName(text).split(" ").filter(Boolean).sort().join(" ");
 }
 
+// A map name / "Any location", tolerating a couple of OCR slips ("Any
+// locati", "Shoreine")
+function lookupLocation(locations: Map<string, string>, text: string): string | undefined {
+  const key = wordSetKey(text);
+  if (!key) return undefined;
+  const exact = locations.get(key);
+  if (exact) return exact;
+  for (const [candidate, name] of locations) {
+    if (Math.abs(candidate.length - key.length) <= 2 && levenshtein(candidate, key) <= 2) return name;
+  }
+  return undefined;
+}
+
 // Every word that appears in a map name ("streets", "of", "tarkov", ...)
 function mapVocabulary(mapNames: string[]): Set<string> {
   const words = new Set<string>();
@@ -727,12 +768,33 @@ function cleanUnknownName(
     (t) => t.length <= 2 && !SHORT_WORDS.has(t.toLowerCase())
   ).length;
   if (debris >= 2) return null;
+  const vocabulary = catalogVocabulary(catalog);
+  const longWords = normalizeName(name).split(" ").filter((w) => w.length >= 3);
+  const known = longWords.filter((w) => vocabulary.has(w)).length;
+  if (longWords.length > 0 && known / longWords.length < 0.6) return null;
   const wanted = ` ${normalizeName(name)} `;
   const fragment = catalog.some((t) => {
     const full = ` ${normalizeName(t.name)} `;
     return full !== wanted && full.includes(wanted);
   });
   return fragment ? null : name;
+}
+
+// Every word (3+ letters) the catalog uses in task names and objectives:
+// the game's English. Unknown names made mostly of words outside it are
+// OCR debris, not a task nobody has catalogued.
+const vocabularyCache = new WeakMap<CatalogTask[], Set<string>>();
+function catalogVocabulary(catalog: CatalogTask[]): Set<string> {
+  const cached = vocabularyCache.get(catalog);
+  if (cached) return cached;
+  const words = new Set<string>();
+  for (const task of catalog) {
+    for (const text of [task.name, ...task.objectives.map((o) => o.text)]) {
+      for (const w of normalizeName(text).split(" ")) if (w.length >= 3) words.add(w);
+    }
+  }
+  vocabularyCache.set(catalog, words);
+  return words;
 }
 
 // Catalog task + display name for a task row as read off the screen, or the

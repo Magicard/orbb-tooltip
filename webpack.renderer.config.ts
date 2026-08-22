@@ -22,6 +22,11 @@ rules.push({
   type: "asset/resource",
 });
 
+rules.push({
+  test: /\.(png|jpe?g|gif|webp)$/i,
+  type: "asset/resource",
+});
+
 export const rendererConfig: Configuration = {
   module: {
     rules,

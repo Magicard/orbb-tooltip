@@ -41,6 +41,7 @@ export default class QuestPanelWindow extends BrowserWindow {
   private panelHeight: number;
   private panelWidth: number;
   // Called with true/false when the panel becomes visible/hidden
+  private interactive: boolean;
   public onVisibilityChange: ((visible: boolean) => void) | null;
 
   constructor(saved?: Partial<QuestPanelBounds>) {
@@ -81,6 +82,7 @@ export default class QuestPanelWindow extends BrowserWindow {
     });
 
     this.panelVisible = false;
+    this.interactive = false;
     this.hideTimer = null;
     this.lastData = null;
     this.panelY = y;
@@ -112,9 +114,20 @@ export default class QuestPanelWindow extends BrowserWindow {
   // through to the game
   setInteractive(enabled: boolean): void {
     if (this.isDestroyed()) return;
-    this.setIgnoreMouseEvents(!enabled || !this.panelVisible, {
-      forward: true,
-    });
+    this.interactive = enabled && this.panelVisible;
+    this.setIgnoreMouseEvents(!this.interactive, { forward: true });
+  }
+
+  // Click-through windows learn the cursor is over them from mouse moves
+  // Electron forwards via a low-level hook - which Windows silently drops
+  // if the app is ever slow. Dropping and re-arming forwarding reinstalls
+  // it; index.ts does this for every overlay window every few seconds.
+  // "drop" then "arm" must run on all windows in that order, because the
+  // hook is shared and only reinstalled once no window is forwarding.
+  forwardingCycle(phase: "drop" | "arm"): void {
+    if (this.isDestroyed() || !this.panelVisible || this.interactive) return;
+    if (phase === "drop") this.setIgnoreMouseEvents(true);
+    else this.setIgnoreMouseEvents(true, { forward: true });
   }
 
   // Move (y) and/or resize (width/height), clamped to the primary work area;
@@ -212,6 +225,7 @@ export default class QuestPanelWindow extends BrowserWindow {
     if (this.isDestroyed()) return;
     this.panelVisible = false;
     this.onVisibilityChange?.(false);
+    this.interactive = false;
     this.setIgnoreMouseEvents(true, { forward: true });
     this.webContents.send(IpcConstants.QuestPanelVisibility, false);
     // Let the slide-out animation play, then drop the window entirely

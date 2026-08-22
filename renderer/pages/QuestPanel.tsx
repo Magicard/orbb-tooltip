@@ -94,10 +94,35 @@ export function QuestPanel() {
       .catch(() => undefined);
     // Wheel events relayed from the main process while the game hides the
     // cursor (see WheelHook); positive delta = wheel up
+    // Ctrl+wheel from the helper: notches add to a target and the list
+    // eases toward it every frame, so quick spins feel immediate yet not
+    // jumpy (the browser's own smooth scroll restarts on every notch and
+    // crawls)
+    let target: number | null = null;
+    let raf = 0;
+    const step = () => {
+      const list = listRef.current;
+      if (!list || target === null) return;
+      const remaining = target - list.scrollTop;
+      if (Math.abs(remaining) < 1) {
+        list.scrollTop = target;
+        target = null;
+        return;
+      }
+      list.scrollTop += remaining * 0.45;
+      raf = requestAnimationFrame(step);
+    };
     window.electron.receive(
       IpcConstants.QuestPanelScroll,
       (_event: unknown, delta: number) => {
-        listRef.current?.scrollBy({ top: -delta, behavior: "auto" });
+        const list = listRef.current;
+        if (!list) return;
+        const max = list.scrollHeight - list.clientHeight;
+        const from = target ?? list.scrollTop;
+        // One notch (120) moves about one quest card
+        target = Math.max(0, Math.min(max, from - delta * 1.1));
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(step);
       }
     );
   }, []);
@@ -285,7 +310,8 @@ export function QuestPanel() {
 
         {data && data.hasProgress && (
           <div>
-            {/* MAP PICKER */}
+            {/* MAP PICKER (stays put while the list scrolls) */}
+            <div className="sticky top-0 z-10 -mx-3 px-3 bg-[#1c1917] pb-0.5">
             <button
               className="text-[11px] uppercase tracking-widest text-stone-400 hover:text-white font-bold mb-1 pt-1 flex items-center gap-1.5"
               onClick={() => setPickerOpen((open) => !open)}
@@ -331,6 +357,7 @@ export function QuestPanel() {
                 ))}
               </div>
             )}
+            </div>
 
             {data.mapName ? (
               <QuestList
@@ -395,6 +422,18 @@ export function QuestPanel() {
                 <div
                   key={t.name}
                   className="rounded bg-stone-800/70 px-2.5 py-1.5 flex items-baseline gap-2 whitespace-nowrap overflow-hidden"
+                  title="Middle-click for the wiki"
+                  onMouseDown={(e) => {
+                    if (e.button === 1) e.preventDefault();
+                  }}
+                  onAuxClick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      window.electron.openExternal(
+                        `https://escapefromtarkov.fandom.com/wiki/${encodeURIComponent(t.name.trim().replace(/\s+/g, "_"))}`
+                      );
+                    }
+                  }}
                 >
                   <span className="text-[15px] font-black text-white truncate">
                     {t.name}
@@ -402,9 +441,11 @@ export function QuestPanel() {
                   <span className="ml-auto text-[11px] text-stone-500 shrink-0">
                     {t.location}
                   </span>
-                  <span className="text-xs text-stone-300 tabular-nums shrink-0">
-                    {t.percent}%
-                  </span>
+                  {t.percent !== null && (
+                    <span className="text-xs text-stone-300 tabular-nums shrink-0">
+                      {t.percent}%
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -507,11 +548,22 @@ function Quest({
 }) {
   const remaining = quest.objectives.filter((o) => !o.done).length;
   return (
-    <div className="rounded bg-stone-800/70 px-2.5 py-1.5">
+    <div
+      className="rounded bg-stone-800/70 px-2.5 py-1.5"
+      onMouseDown={(e) => {
+        if (e.button === 1) e.preventDefault(); // no autoscroll cursor
+      }}
+      onAuxClick={(e) => {
+        if (e.button === 1) {
+          e.preventDefault();
+          window.electron.openExternal(quest.wiki);
+        }
+      }}
+    >
       <button
         className="w-full flex items-baseline gap-2 whitespace-nowrap overflow-hidden text-left"
         onClick={onToggle}
-        title={collapsed ? "Click to expand" : "Click to collapse"}
+        title={(collapsed ? "Click to expand" : "Click to collapse") + " - middle-click for the wiki"}
       >
         <span className="text-[15px] font-black text-white truncate">
           {quest.name}

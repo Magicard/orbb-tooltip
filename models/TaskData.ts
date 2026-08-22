@@ -129,8 +129,17 @@ export type CatalogTask = TaskMeta & {
   traderId: string;
   mapId: string | null;
   kappaRequired: boolean;
+  wikiLink: string | null;
   objectives: CatalogObjective[];
 };
+
+// The community wiki page for a task: tarkov.dev's link when it has one,
+// otherwise the page the wiki would use for that name
+export function taskWikiUrl(name: string, wikiLink?: string | null): string {
+  if (wikiLink && /^https:\/\/escapefromtarkov\.fandom\.com\//.test(wikiLink)) return wikiLink;
+  const page = name.trim().replace(/\s+/g, "_");
+  return `https://escapefromtarkov.fandom.com/wiki/${encodeURIComponent(page).replace(/%2F/g, "/")}`;
+}
 
 export type GameMap = { id: string; nameId: string; name: string };
 
@@ -156,6 +165,8 @@ export type QuestPanelQuest = {
   name: string;
   trader: string;
   kappa: boolean;
+  // Community wiki page (middle-click a quest to open it)
+  wiki: string;
   objectives: QuestPanelObjective[];
   // Overall progress read from the in-game Tasks screen, if scanned
   percent?: number;
@@ -168,7 +179,7 @@ export type QuestPanelQuest = {
 // tasks), known only from scanning the Tasks screen
 export type QuestPanelOperational = {
   name: string;
-  percent: number;
+  percent: number | null;
   location: string;
 };
 
@@ -705,6 +716,7 @@ export default class TaskData {
       traderId: task.trader ?? "",
       mapId: task.map ?? null,
       kappaRequired: task.kappaRequired === true,
+      wikiLink: typeof task.wikiLink === "string" ? task.wikiLink : null,
       minPlayerLevel: task.minPlayerLevel ?? 1,
       factionName: task.factionName,
       prerequisites: (task.taskRequirements ?? [])
@@ -824,7 +836,7 @@ export default class TaskData {
       operational: scan
         ? scan
             .getUnknownTasks()
-            .filter((t) => t.percent < 100 && !/comple|done|fail/i.test(t.status))
+            .filter((t) => (t.percent ?? 0) < 100 && !/comple|done|fail/i.test(t.status))
             .map((t) => ({ name: t.name, percent: t.percent, location: t.location }))
             .sort((a, b) => a.name.localeCompare(b.name))
         : [],
@@ -913,6 +925,7 @@ export default class TaskData {
         name: task.name,
         trader: traderNames[task.traderId] ?? "",
         kappa: task.kappaRequired,
+        wiki: taskWikiUrl(task.name, task.wikiLink),
         objectives,
         percent,
         ready: toast?.ready || undefined,

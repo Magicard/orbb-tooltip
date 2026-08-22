@@ -281,10 +281,13 @@ export default class OCRProcess {
 
   // Ask the helper to OCR the whole screen (or a region, in physical
   // pixels); resolves with Tesseract TSV. Requests are serialised.
+  // Resolves with "UNCHANGED" for a full-screen scan with onlyIfChanged
+  // when the screen is the same as at the previous full-screen scan
   requestScreenScan(
     region?: { x: number; y: number; width: number; height: number },
     dumpPath?: string,
-    exclude: { x: number; y: number; width: number; height: number }[] = []
+    exclude: { x: number; y: number; width: number; height: number }[] = [],
+    onlyIfChanged = false
   ): Promise<string> {
     const run = () =>
       new Promise<string>((resolve, reject) => {
@@ -306,7 +309,9 @@ export default class OCRProcess {
               )
               .join("") +
             (dumpPath ? ` DUMP ${dumpPath}` : "")
-          : "SCAN";
+          : onlyIfChanged
+            ? "SCAN IFCHANGED"
+            : "SCAN";
         this.ocrProcess.stdin.write(command + "\n");
       });
     const next = this.scanQueue.then(run, run);
@@ -353,7 +358,20 @@ export default class OCRProcess {
 
       // Heartbeat: proves the helper's main loop is alive (the timestamp is
       // already recorded in onNewData)
-      if (line.startsWith("ALIVE||")) return;
+      // Heartbeat carries the helper's hook state; if it ever disagrees
+      // with what the panel needs, put it right (lost command, restart...)
+      if (line.startsWith("ALIVE||")) {
+        const hookOn = line.trim().endsWith("1");
+        if (hookOn !== this.wheelHookWanted && this.ocrProcess && !this.ocrProcess.killed) {
+          log.info(
+            `Helper wheel hook is ${hookOn ? "on" : "off"} but should be ${
+              this.wheelHookWanted ? "on" : "off"
+            } - correcting`
+          );
+          this.ocrProcess.stdin.write(this.wheelHookWanted ? "WHEELHOOK ON\n" : "WHEELHOOK OFF\n");
+        }
+        return;
+      }
 
       // Screen scan output between the markers goes to the pending request
       if (line === "SCANRESULT_BEGIN") {

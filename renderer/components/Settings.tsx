@@ -138,6 +138,13 @@ export default function Settings({
   const [localEftLogsPath, setLocalEftLogsPath] = useState(eftLogsPath);
   const [localQuestScanHotkey, setLocalQuestScanHotkey] = useState(questScanHotkey);
   const [localMapHotkey, setLocalMapHotkey] = useState(mapHotkey);
+  const [syncToTracker, setSyncToTracker] = useState(true);
+  useEffect(() => {
+    window.electron
+      .getUserConfig()
+      .then((config) => setSyncToTracker(config?.syncToTracker !== false))
+      .catch(() => undefined);
+  }, []);
   const [isValidatingApiKey, setIsValidatingApiKey] = useState(false);
   const [apiKeyValidationMessage, setApiKeyValidationMessage] = useState("");
   const [isValidatingTrackerToken, setIsValidatingTrackerToken] =
@@ -675,10 +682,10 @@ export default function Settings({
   };
 
   return (
-    <div className="fixed inset-0 bg-stone-900/95 z-50 flex justify-center overflow-y-auto max-h-screen py-4">
-      <div className="bg-stone-800 rounded-lg p-4 max-w-md w-full mx-4 h-fit">
+    <div className="fixed inset-0 bg-stone-900/95 z-50 flex justify-center overflow-y-auto max-h-screen py-4 font-['Bender'] tracking-wide [scrollbar-width:thin] [scrollbar-color:#57534e_transparent]">
+      <div className="bg-stone-800/70 border border-stone-700 rounded-lg p-4 max-w-md w-full mx-4 h-fit">
         <div className="flex justify-between items-center mb-2">
-          <h2 className="text-xl font-bold text-white">Settings</h2>
+          <h2 className="text-[11px] uppercase tracking-widest text-stone-400 font-bold">Settings</h2>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowHelp(x => !x)}
@@ -1024,6 +1031,38 @@ export default function Settings({
                   {trackerTokenMessage}
                 </p>
               )}
+            </div>
+
+            {/* Push progress to TarkovTracker */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label htmlFor="sync-to-tracker-toggle" className="text-sm font-medium cursor-pointer">
+                  Push Progress to TarkovTracker
+                </label>
+                <p className="text-xs text-stone-400">
+                  Hand-ins from the game's logs and progress read off the Tasks screen are sent to
+                  your tracker (needs a token with the WP permission). Only new progress is ever sent.
+                </p>
+              </div>
+              <button
+                id="sync-to-tracker-toggle"
+                onClick={() => {
+                  const next = !syncToTracker;
+                  setSyncToTracker(next);
+                  void saveQuestPanelConfig({ syncToTracker: next });
+                }}
+                className={`relative inline-flex h-5 w-10 min-w-10 items-center rounded-full transition-colors ${
+                  syncToTracker ? "bg-green-500" : "bg-stone-600"
+                }`}
+                role="switch"
+                aria-checked={syncToTracker}
+              >
+                <span
+                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                    syncToTracker ? "translate-x-[22px]" : "translate-x-1"
+                  }`}
+                />
+              </button>
             </div>
 
             {/* Game Mode */}

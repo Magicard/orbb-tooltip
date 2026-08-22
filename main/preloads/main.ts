@@ -36,6 +36,8 @@ declare global {
       selectPanelMap: (mapNameId: string | null) => void;
       setPanelOpacity: (opacity: number, commit?: boolean) => void;
       closePanel: () => void;
+      requestCalibration: () => void;
+      openExternal: (url: string) => void;
       toggleMap: () => void;
       toggleScan: () => void;
       requestScanStatus: () => void;
@@ -80,6 +82,9 @@ contextBridge.exposeInMainWorld("electron", {
   },
   validateTarkovTrackerToken: (token: string) => {
     return ipcRenderer.invoke(IpcConstants.ValidateTarkovTrackerToken, token);
+  },
+  requestCalibration: () => {
+    ipcRenderer.send(IpcConstants.RequestScreenCalibration);
   },
   refetchItems: () => {
     return ipcRenderer.invoke(IpcConstants.RefetchItems);
