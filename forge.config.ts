@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
 import { MakerZIP } from "@electron-forge/maker-zip";
@@ -22,12 +24,24 @@ const config: ForgeConfig = {
     ],
     name: "ORBBToolTip",
     icon: "icon.ico",
-    appVersion: "1.0.0",
   },
   rebuildConfig: {},
+  hooks: {
+    // Tesseract is initialised with Init(NULL, "eng"), which looks for the
+    // language data next to the executable rather than in resources. Runs for
+    // `package` and `make` alike, so an installer build gets it too.
+    postPackage: async (_config, { outputPaths }) => {
+      for (const output of outputPaths) {
+        const packaged = path.join(output, "resources", "eng.traineddata");
+        if (fs.existsSync(packaged)) {
+          fs.renameSync(packaged, path.join(output, "eng.traineddata"));
+        }
+      }
+    },
+  },
   makers: [
     new MakerSquirrel({}),
-    new MakerZIP({}, ["darwin"]),
+    new MakerZIP({}, ["darwin", "win32"]),
     new MakerRpm({}),
     new MakerDeb({}),
   ],

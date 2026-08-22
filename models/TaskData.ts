@@ -145,6 +145,9 @@ export type QuestEventMap = Map<
 
 export type QuestPanelObjective = {
   id: string;
+  // Its place in the task's own list, so finished steps stay where the game
+  // shows them instead of being pushed to the bottom
+  order: number;
   text: string;
   done: boolean;
   count: number;
@@ -173,6 +176,8 @@ export type QuestPanelQuest = {
   objectives: QuestPanelObjective[];
   // Overall progress read from the in-game Tasks screen, if scanned
   percent?: number;
+  // When a rotating Operational task runs out, in wall-clock ms
+  expiresAt?: number;
   // From in-raid notifications: all objectives done / N subtasks done
   ready?: boolean;
   subtasksDone?: number;
@@ -183,15 +188,6 @@ export type QuestChange = {
   at: number;
   text: string;
   source: "scan" | "game" | "raid" | "tracker";
-};
-
-// A task the game lists but no catalog knows (Operational daily/weekly
-// tasks), known only from scanning the Tasks screen
-export type QuestPanelOperational = {
-  name: string;
-  percent?: number;
-  location: string;
-  wiki: string;
 };
 
 export type QuestPanelData = {
@@ -210,7 +206,6 @@ export type QuestPanelData = {
   anywhere: QuestPanelQuest[];
   // Out of raid: how many active quests have objectives on each map
   perMap: { mapName: string; quests: number }[];
-  operational: QuestPanelOperational[];
   scanned: { at: number; count: number } | null;
   // Most recent quest changes from any source, newest first
   changes: QuestChange[];
@@ -817,9 +812,57 @@ export default class TaskData {
     // so icon-junk reads and partial names never linger as "Operational"
     scan?.prune(catalog, maps.map((m) => m.name));
 
+    // Operational (daily/weekly) tasks: no catalog has ever heard of them, so
+    // their name, map, steps and time left all come off the screen. They go in
+    // the same lists as everything else - on their map, or under Anywhere.
+    const dailyHere: QuestPanelQuest[] = [];
+    const dailyAnywhere: QuestPanelQuest[] = [];
+    const dailyPerMap = new Map<string, number>();
+    for (const daily of scan?.getUnknownTasks() ?? []) {
+      if ((daily.percent ?? 0) >= 100 || /comple|done|fail/i.test(daily.status)) continue;
+      const map = maps.find((m) => m.name === daily.location);
+      if (map && currentMap && map.id !== currentMap.id) continue;
+      if (map && !currentMap) {
+        dailyPerMap.set(map.name, (dailyPerMap.get(map.name) ?? 0) + 1);
+        continue;
+      }
+      const objectives: QuestPanelObjective[] = (daily.objectives ?? []).map((o, order) => ({
+        id: `${daily.key}#${order}`,
+        order,
+        text: o.text,
+        done: o.done,
+        count: o.count ?? (o.done ? 1 : 0),
+        total: o.total ?? 1,
+        optional: false,
+        here: !!map,
+        anywhere: !map,
+        inRaid: true,
+      }));
+      const quest: QuestPanelQuest = {
+        id: `operational:${daily.key}`,
+        name: daily.name,
+        trader: traderNames[daily.traderId ?? ""] ?? "",
+        kappa: false,
+        wiki: taskWikiUrl(daily.name),
+        objectives,
+        allObjectives: objectives,
+        percent: daily.percent,
+        expiresAt: daily.expiresAt,
+        allDone: (objectives.length > 0 && objectives.every((o) => o.done)) || undefined,
+      };
+      (map ? dailyHere : dailyAnywhere).push(quest);
+    }
+
+    // Out of raid, the map picker shows how much each map is worth going to
+    const toPerMap = (counts: Map<string, number>) =>
+      [...counts.entries()]
+        .map(([mapName, quests]) => ({ mapName, quests }))
+        .sort((a, b) => b.quests - a.quests || a.mapName.localeCompare(b.mapName));
+
     const useLogs = !!questEvents && questEvents.size > 0;
     const empty: QuestPanelData = {
-      hasProgress: !!progress || useLogs,
+      hasProgress:
+        !!progress || useLogs || dailyHere.length + dailyAnywhere.length + dailyPerMap.size > 0,
       maps: maps
         .map((m) => ({ nameId: m.nameId, name: m.name }))
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -828,21 +871,9 @@ export default class TaskData {
       mapName: currentMap?.name ?? null,
       inRaid: state.inRaid,
       raidKind: state.raidKind,
-      here: [],
-      anywhere: [],
-      perMap: [],
-      operational: scan
-        ? scan
-            .getUnknownTasks()
-            .filter((t) => (t.percent ?? 0) < 100 && !/comple|done|fail/i.test(t.status))
-            .map((t) => ({
-              name: t.name,
-              percent: t.percent,
-              location: t.location,
-              wiki: taskWikiUrl(t.name),
-            }))
-            .sort((a, b) => a.name.localeCompare(b.name))
-        : [],
+      here: dailyHere,
+      anywhere: dailyAnywhere,
+      perMap: toPerMap(dailyPerMap),
       scanned: scan && scan.getLastScan().at ? scan.getLastScan() : null,
       changes,
     };
@@ -864,8 +895,10 @@ export default class TaskData {
       objectiveFilter: (o: CatalogObjective) => boolean
     ): QuestPanelQuest | null => {
       const toast = scan?.toastFor(task.id, task.name);
+      // The game's own verdict, read off the trader's task list
+      const readyOnScreen = scan?.readyFor(task.id) === true;
       const allObjectives: QuestPanelObjective[] = task.objectives
-        .map((o) => {
+        .map((o, order) => {
           const p = objectiveState(o.id);
           // Progress read off the Tasks screen for this row; a "find" objective
           // also counts what its "hand over" twin has already received
@@ -887,6 +920,7 @@ export default class TaskData {
           const count = Math.min(o.count, Math.max(trackerCount, scannedCount, twinCount));
           return {
             id: o.id,
+            order,
             text: o.text,
             done: p?.complete === true || scannedDone || (o.count > 0 && count >= o.count),
             count,
@@ -905,11 +939,15 @@ export default class TaskData {
       // still has to hand it in. It stays, flagged, sorted last.
       const doneHere = objectives.every((o) => o.done);
       const allDone = allObjectives.every((o) => o.done);
-      // Unfinished first, then done ones as feedback
-      objectives.sort((a, b) => Number(a.done) - Number(b.done));
       const percent = scan?.percentFor(task.id);
       if (toast?.ready) {
         for (const o of objectives) {
+          o.done = true;
+          o.count = o.total;
+        }
+      } else if (readyOnScreen) {
+        for (const o of objectives) {
+          if (o.optional) continue;
           o.done = true;
           o.count = o.total;
         }
@@ -958,14 +996,14 @@ export default class TaskData {
         doneHere: doneHere || undefined,
         allDone: allDone || undefined,
         percent,
-        ready: toast?.ready || undefined,
+        ready: toast?.ready || readyOnScreen || undefined,
         subtasksDone: toast?.subtasks || undefined,
       };
     };
 
-    const here: QuestPanelQuest[] = [];
-    const anywhere: QuestPanelQuest[] = [];
-    const perMapCounts = new Map<string, number>();
+    const here: QuestPanelQuest[] = [...dailyHere];
+    const anywhere: QuestPanelQuest[] = [...dailyAnywhere];
+    const perMapCounts = new Map(dailyPerMap);
 
     const inRaid = (o: CatalogObjective) => IN_RAID_OBJECTIVE_TYPES.has(o.type);
 
@@ -1016,11 +1054,7 @@ export default class TaskData {
       ...empty,
       here,
       anywhere,
-      perMap: [...perMapCounts.entries()]
-        .map(([mapName, quests]) => ({ mapName, quests }))
-        .sort(
-          (a, b) => b.quests - a.quests || a.mapName.localeCompare(b.mapName)
-        ),
+      perMap: toPerMap(perMapCounts),
     };
   }
 }

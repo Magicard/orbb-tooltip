@@ -25,7 +25,7 @@ type Drag = {
 
 const COLLAPSED_KEY = "orbb.questPanel.collapsed";
 const SHOW_DONE_KEY = "orbb.questPanel.showDone";
-type SectionKey = "map" | "anywhere" | "operational";
+type SectionKey = "map" | "anywhere";
 // Where a change came from, at a glance
 const CHANGE_MARKS = { scan: "\u25ce", game: "\u25cf", raid: "\u25b8", tracker: "\u21ba" } as const;
 const CHANGE_COLOURS = {
@@ -365,10 +365,8 @@ export function QuestPanel() {
               </button>
             ) : (
               <span className="text-[11px] uppercase tracking-widest text-stone-500 font-bold">
-                {section === "anywhere" ? "Anywhere" : "Operational"}
-                <span className="ml-1.5 text-stone-600">
-                  {section === "anywhere" ? data.anywhere.length : data.operational.length}
-                </span>
+                Anywhere
+                <span className="ml-1.5 text-stone-600">{data.anywhere.length}</span>
               </span>
             )}
             <button
@@ -474,37 +472,6 @@ export function QuestPanel() {
               collapsed={collapsed}
               onToggle={toggleCollapsed}
             />
-          </div>
-        )}
-
-        {data && data.operational.length > 0 && (
-          <div data-section="operational">
-            <SectionTitle>
-              Operational
-              <span className="ml-1.5 text-stone-600">{data.operational.length}</span>
-            </SectionTitle>
-            <div className="space-y-1.5">
-              {data.operational.map((t) => (
-                <div
-                  key={t.name}
-                  className="rounded bg-stone-800/70 px-2.5 py-1.5 flex items-baseline gap-2 whitespace-nowrap overflow-hidden"
-                  title="Middle-click for the wiki"
-                  {...wikiProps(t.wiki)}
-                >
-                  <span className="text-[15px] font-black text-white truncate">
-                    {t.name}
-                  </span>
-                  <span className="ml-auto text-[11px] text-stone-500 shrink-0">
-                    {t.location}
-                  </span>
-                  {t.percent !== undefined && (
-                    <span className="text-xs text-stone-300 tabular-nums shrink-0">
-                      {t.percent}%
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
           </div>
         )}
 
@@ -646,10 +613,22 @@ function Quest({
   collapsed: boolean;
   onToggle: () => void;
 }) {
-  // Finished objectives are hidden unless the "done" toggle is on - and
-  // with it on, the whole quest is listed (every map, hand-ins included)
+  // Finished objectives are hidden unless the "done" toggle is on. With it
+  // on we also surface finished work from the rest of the quest (other maps,
+  // hand-ins) - but only finished work: an outstanding hand-over step is not
+  // part of this list and must not appear just because you asked to see what
+  // is done.
   const showDone = useContext(ShowDoneContext);
-  const visibleObjectives = showDone ? quest.allObjectives : quest.objectives.filter((o) => !o.done);
+  const visibleObjectives = (
+    showDone
+      ? [
+          ...quest.objectives,
+          ...quest.allObjectives.filter(
+            (o) => o.done && !quest.objectives.some((shown) => shown.id === o.id)
+          ),
+        ]
+      : quest.objectives.filter((o) => !o.done)
+  ).sort((a, b) => a.order - b.order);
   // Every subtask done but not handed in yet (the logs would have removed
   // it otherwise): a green title and a DONE badge. Its objectives are all
   // finished, so they show only with the "done" toggle on - which is the
@@ -696,6 +675,7 @@ function Quest({
               ✓{quest.subtasksDone}
             </span>
           )}
+          {quest.expiresAt !== undefined && <TimeLeft at={quest.expiresAt} />}
           {quest.percent !== undefined && (
             <span className="text-stone-300 tabular-nums mr-1.5">
               {quest.percent}%
@@ -712,6 +692,28 @@ function Quest({
         </div>
       )}
     </div>
+  );
+}
+
+// How long a rotating Operational task has left, counted down live
+function TimeLeft({ at }: { at: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick((n) => n + 1), 30 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const minutes = Math.floor((at - Date.now()) / 60000);
+  if (minutes < 0) return <span className="text-red-400 mr-1.5">expired</span>;
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const left = days > 0 ? `${days}d ${hours % 24}h` : hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+  return (
+    <span
+      className={`tabular-nums mr-1.5 ${hours < 3 ? "text-amber-400" : "text-stone-400"}`}
+      title="Time left before this task rotates out"
+    >
+      {left}
+    </span>
   );
 }
 

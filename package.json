@@ -7,7 +7,6 @@
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
-    "postpackage": "powershell -Command \"Move-Item -Path './out/ORBBToolTip-win32-x64/resources/eng.traineddata' -Destination './out/ORBBToolTip-win32-x64/'\"",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx ."
