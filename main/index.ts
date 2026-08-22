@@ -318,16 +318,14 @@ try {
     return trackerPullInFlight;
   };
 
-  // What an overlay depends on, checked (and put right) the moment it opens:
-  // the native helper alive and hooked, and the window really on top. Cheap,
-  // and it turns "it stopped working" into "it fixed itself".
-  const preflightOverlays = (what: string): void => {
-    const fixed = ocr?.ensureHelperReady() ?? [];
+  // An overlay must really be on top the moment it opens. (The helper looks
+  // after itself: its close handler respawns it, a watchdog kills it if it
+  // goes quiet, and its heartbeat re-asserts the wheel hook.)
+  const raiseOverlays = (): void => {
     for (const win of [questPanel, mapWindow]) {
       if (!win || win.isDestroyed() || !win.isVisible()) continue;
       win.setAlwaysOnTop(true, "screen-saver");
     }
-    if (fixed.length > 0) log.info(`Preflight (${what}): ${fixed.join("; ")}`);
   };
 
   const startTrackerPolling = (): void => {
@@ -766,17 +764,23 @@ try {
     const SCAN_SESSION_GRACE_MS = 40 * 1000;
     // The scan hotkey / panel chip toggles the session
     function toggleScanSession() {
-      if (scanSessionTimer) stopScanSession();
+      if (scanSessionTimer) stopScanSession("stopped");
       else startScanSession();
     }
 
-    function stopScanSession() {
+    // The one way a session ends, whether you toggled it off or it ran out
+    function stopScanSession(why: "stopped" | "ended") {
       if (scanSessionTimer) clearTimeout(scanSessionTimer);
       scanSessionTimer = null;
       scanSessionUntil = 0;
       scanSessionEndedAt = Date.now();
-      endScanSession();
-      log.info(`Tasks screen scan session stopped: ${scanSessionUpdates} update(s)`);
+      // The map was put away for the scan, so it goes back up
+      if (mapHiddenForScan) {
+        mapHiddenForScan = false;
+        if (mapWindow && !mapWindow.isDestroyed()) mapWindow.showMap();
+      }
+      getTrackerSync().release();
+      log.info(`Tasks screen scan session ${why}: ${scanSessionUpdates} update(s)`);
       sendScanStatus(false);
       pushQuestPanelData();
     }
@@ -792,23 +796,11 @@ try {
         secondsLeft: active
           ? Math.max(0, Math.round((scanSessionUntil - Date.now()) / 1000))
           : 0,
-        passes: scanSessionPasses,
         tasks: taskScan ? taskScan.getLastScan().count : 0,
         updates: scanSessionUpdates,
         newTasks: scanSessionNewTasks,
         endedAt: scanSessionEndedAt,
       });
-    }
-
-    function endScanSession() {
-      restoreMapAfterScan();
-      getTrackerSync().release();
-    }
-
-    function restoreMapAfterScan() {
-      if (!mapHiddenForScan) return;
-      mapHiddenForScan = false;
-      if (mapWindow && !mapWindow.isDestroyed()) mapWindow.showMap();
     }
 
     function startScanSession() {
@@ -862,12 +854,7 @@ try {
           Date.now() >= scanSessionUntil ||
           (impatient && scanSessionEmptyRuns >= SCAN_SESSION_MAX_EMPTY_PASSES);
         if (done) {
-          scanSessionTimer = null;
-          scanSessionEndedAt = Date.now();
-          endScanSession();
-          log.info(`Tasks screen scan session ended: ${scanSessionUpdates} update(s)`);
-          sendScanStatus(false);
-          pushQuestPanelData();
+          stopScanSession("ended");
           return;
         }
         sendScanStatus(true);
@@ -1019,7 +1006,7 @@ try {
       if (!mapWindow || mapWindow.isDestroyed()) {
         mapWindow = new MapWindow(config.mapWindowBounds);
         mapWindow.onVisibilityChange = (visible) => {
-          if (visible) preflightOverlays("map opened");
+          if (visible) raiseOverlays();
         };
       }
 
@@ -1030,7 +1017,7 @@ try {
         // Opening the panel is a good moment to check our own plumbing and
         // catch up with the tracker
         if (visible) {
-          preflightOverlays("quest panel opened");
+          raiseOverlays();
           if (!gameLog?.state.inRaid) void pullTrackerProgress("panel opened");
         }
         if (!mapWindow || mapWindow.isDestroyed()) return;

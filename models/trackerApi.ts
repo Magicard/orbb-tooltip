@@ -21,7 +21,3 @@ export const TRACKER_USER_AGENT =
   "orbb-tooltip/1.0 (+https://github.com/Magicard/orbb-tooltip)";
 
 export const TRACKER_TIMEOUT_MS = 15 * 1000;
-
-export function trackerUrls(route: string): string[] {
-  return TRACKER_API_BASES.map((base) => base + route);
-}

@@ -18,10 +18,14 @@ import {
   LEGACY_TRACKER_HOST,
   TRACKER_TIMEOUT_MS,
   TRACKER_USER_AGENT,
-  trackerUrls,
+  TRACKER_API_BASES,
 } from "./trackerApi";
 
-const TRACKER_PROGRESS_URLS = trackerUrls("/progress");
+const TRACKER_PROGRESS_URLS = TRACKER_API_BASES.map((base) => `${base}/progress`);
+
+// json.tarkov.dev serves some collections as a keyed object rather than an array
+const asList = <T,>(value: unknown): T[] =>
+  (Array.isArray(value) ? value : Object.values(value ?? {})) as T[];
 
 type TarkovDevObjective = {
   id: string;
@@ -174,8 +178,6 @@ export type QuestPanelQuest = {
   subtasksDone?: number;
 };
 
-// A task the game lists but no catalog knows (Operational daily/weekly
-// tasks), known only from scanning the Tasks screen
 // One thing that changed about a quest, and where we learned it
 export type QuestChange = {
   at: number;
@@ -183,10 +185,13 @@ export type QuestChange = {
   source: "scan" | "game" | "raid" | "tracker";
 };
 
+// A task the game lists but no catalog knows (Operational daily/weekly
+// tasks), known only from scanning the Tasks screen
 export type QuestPanelOperational = {
   name: string;
   percent?: number;
   location: string;
+  wiki: string;
 };
 
 export type QuestPanelData = {
@@ -196,9 +201,6 @@ export type QuestPanelData = {
   mapNameId: string | null;
   // True when the user picked a map instead of following the raid
   mapOverride: boolean;
-  // True when the list comes from quests you actually accepted in-game
-  // (read from the game's logs) rather than from computed availability
-  fromGameLogs: boolean;
   mapName: string | null;
   inRaid: boolean;
   raidKind: "pmc" | "scav" | "unknown";
@@ -214,7 +216,6 @@ export type QuestPanelData = {
   changes: QuestChange[];
   // An image exists in the maps folder for this map (shows the Map button)
   hasMapImage?: boolean;
-  updatedAt: number;
 };
 
 // One task or hideout upgrade that consumes items
@@ -309,8 +310,7 @@ export default class TaskData {
 
     const sources: RequirementSource[] = [];
 
-    const rawTasks = tasksResponse?.data?.tasks ?? [];
-    const tasks = Array.isArray(rawTasks) ? rawTasks : Object.values(rawTasks);
+    const tasks = asList<TarkovDevTask>(tasksResponse?.data?.tasks);
     for (const task of tasks) {
       const items: RequirementSource["items"] = [];
       for (const objective of task.objectives ?? []) {
@@ -441,10 +441,7 @@ export default class TaskData {
         const completedTaskIds = new Set<string>();
         const failedTaskIds = new Set<string>();
         const invalidTaskIds = new Set<string>();
-        const tasksProgress = Array.isArray(data?.tasksProgress)
-          ? data.tasksProgress
-          : Object.values(data?.tasksProgress ?? {});
-        for (const entry of tasksProgress as any[]) {
+        for (const entry of asList<any>(data?.tasksProgress)) {
           if (entry?.id == null) continue;
           const id = String(entry.id);
           if (entry.complete === true) completedTaskIds.add(id);
@@ -453,10 +450,7 @@ export default class TaskData {
         }
 
         const completedHideoutLevelIds = new Set<string>();
-        const hideoutProgress = Array.isArray(data?.hideoutModulesProgress)
-          ? data.hideoutModulesProgress
-          : Object.values(data?.hideoutModulesProgress ?? {});
-        for (const entry of hideoutProgress as any[]) {
+        for (const entry of asList<any>(data?.hideoutModulesProgress)) {
           if (entry?.id != null && entry.complete === true) {
             completedHideoutLevelIds.add(String(entry.id));
           }
@@ -466,10 +460,7 @@ export default class TaskData {
           string,
           { complete: boolean; count: number }
         >();
-        const objectivesProgress = Array.isArray(data?.taskObjectivesProgress)
-          ? data.taskObjectivesProgress
-          : Object.values(data?.taskObjectivesProgress ?? {});
-        for (const entry of objectivesProgress as any[]) {
+        for (const entry of asList<any>(data?.taskObjectivesProgress)) {
           if (entry?.id == null) continue;
           objectiveProgress.set(String(entry.id), {
             complete: entry.complete === true,
@@ -715,8 +706,7 @@ export default class TaskData {
       ),
     ]);
     const names = taskNames?.data ?? {};
-    const rawTasks = tasksResponse?.data?.tasks ?? [];
-    const tasks = Array.isArray(rawTasks) ? rawTasks : Object.values(rawTasks);
+    const tasks = asList<any>(tasksResponse?.data?.tasks);
 
     const catalog: CatalogTask[] = tasks.map((task: any) => ({
       id: task.id,
@@ -764,9 +754,7 @@ export default class TaskData {
       ),
       fetchTarkovDevJson<TarkovDevTranslationsResponse>(`/${gameMode}/maps_en`),
     ]);
-    const raw = mapsResponse?.data?.maps ?? [];
-    const list = Array.isArray(raw) ? raw : Object.values(raw);
-    const maps: GameMap[] = list.map((m: any) => ({
+    const maps: GameMap[] = asList<any>(mapsResponse?.data?.maps).map((m: any) => ({
       id: m.id,
       nameId: m.nameId,
       name: mapNames?.data?.[m.name] ?? m.name,
@@ -791,10 +779,12 @@ export default class TaskData {
       for (const trader of Object.values(traders?.data ?? {})) {
         if (trader?.id) names[trader.id] = translations?.data?.[trader.name];
       }
+      // Only a successful read is worth remembering; caching a failure would
+      // blank every trader name for the rest of the session
+      this.traderNamesByGameMode.set(gameMode, names);
     } catch (error) {
       log.warn("Failed to load trader names for quest panel:", error);
     }
-    this.traderNamesByGameMode.set(gameMode, names);
     return names;
   }
 
@@ -830,7 +820,6 @@ export default class TaskData {
     const useLogs = !!questEvents && questEvents.size > 0;
     const empty: QuestPanelData = {
       hasProgress: !!progress || useLogs,
-      fromGameLogs: useLogs,
       maps: maps
         .map((m) => ({ nameId: m.nameId, name: m.name }))
         .sort((a, b) => a.name.localeCompare(b.name)),
@@ -846,27 +835,28 @@ export default class TaskData {
         ? scan
             .getUnknownTasks()
             .filter((t) => (t.percent ?? 0) < 100 && !/comple|done|fail/i.test(t.status))
-            .map((t) => ({ name: t.name, percent: t.percent, location: t.location }))
+            .map((t) => ({
+              name: t.name,
+              percent: t.percent,
+              location: t.location,
+              wiki: taskWikiUrl(t.name),
+            }))
             .sort((a, b) => a.name.localeCompare(b.name))
         : [],
       scanned: scan && scan.getLastScan().at ? scan.getLastScan() : null,
       changes,
-      updatedAt: Date.now(),
     };
     if (!progress && !useLogs) return empty;
 
     // Preferred: the quests you accepted in-game and have not handed in or
     // failed (from the game's own notifications). Fallback: what the task
     // graph says is unlocked, which over-counts storyline-gated quests.
-    const active = useLogs
-      ? catalog.filter((task) => {
-          const ev = questEvents!.get(task.id);
-          if (!ev || ev.status !== "started") return false;
-          if (progress?.completedTaskIds.has(task.id)) return false;
-          if (progress?.failedTaskIds.has(task.id)) return false;
-          return true;
-        })
-      : catalog.filter((task) => this.taskStatus(task, progress!) === "active");
+    const active = catalog.filter((task) =>
+      useLogs
+        ? this.taskStatusFromLogs(task.id, questEvents!, progress) === "active" &&
+          !progress?.failedTaskIds.has(task.id)
+        : this.taskStatus(task, progress!) === "active"
+    );
     const objectiveState = (id: string) => progress?.objectiveProgress.get(id);
 
     const toPanelQuest = (
@@ -999,17 +989,19 @@ export default class TaskData {
       );
       if (anyQ) anywhere.push(anyQ);
 
-      // Per-map summary for the out-of-raid view
-      const mapsTouched = new Set<string>();
-      for (const o of task.objectives) {
-        if (!inRaid(o)) continue;
-        const p = objectiveState(o.id);
-        if (p?.complete) continue;
-        for (const id of o.mapIds) mapsTouched.add(id);
-      }
-      for (const id of mapsTouched) {
-        const name = mapNameById.get(id);
-        if (name) perMapCounts.set(name, (perMapCounts.get(name) ?? 0) + 1);
+      // Per-map summary, drawn only when no map is selected
+      if (!currentMap) {
+        const mapsTouched = new Set<string>();
+        for (const o of task.objectives) {
+          if (!inRaid(o)) continue;
+          const p = objectiveState(o.id);
+          if (p?.complete) continue;
+          for (const id of o.mapIds) mapsTouched.add(id);
+        }
+        for (const id of mapsTouched) {
+          const name = mapNameById.get(id);
+          if (name) perMapCounts.set(name, (perMapCounts.get(name) ?? 0) + 1);
+        }
       }
     }
 

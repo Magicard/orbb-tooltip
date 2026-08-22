@@ -5,7 +5,6 @@ import ClickThrough from "./ClickThrough";
 export type QuestScanStatus = {
   active: boolean;
   secondsLeft: number;
-  passes: number;
   tasks: number;
   // Changes this session made to what we know (new / changed task rows,
   // counters, ticks), and when the last session ended
@@ -25,15 +24,6 @@ const MIN_HEIGHT = 160;
 const SLIDE_MS = 260;
 
 export type QuestPanelBounds = { y: number; height: number; width: number };
-
-export type QuestPanelBoundsInfo = QuestPanelBounds & {
-  minY: number;
-  maxY: number;
-  minHeight: number;
-  maxHeight: number;
-  minWidth: number;
-  maxWidth: number;
-};
 
 // Questie-style quest list floating at the right edge of the screen. Hidden
 // (not just off-screen) when closed so it costs nothing while you play;
@@ -111,10 +101,6 @@ export default class QuestPanelWindow extends BrowserWindow {
     return this.panelVisible;
   }
 
-  getPanelBounds(): QuestPanelBounds {
-    return { y: this.panelY, height: this.panelHeight, width: this.panelWidth };
-  }
-
   setInteractive(enabled: boolean): void {
     this.clickThrough.set(enabled);
   }
@@ -125,7 +111,7 @@ export default class QuestPanelWindow extends BrowserWindow {
 
   // Move (y) and/or resize (width/height), clamped to the primary work area;
   // the panel always hugs the right edge
-  applyPanelBounds(patch: Partial<QuestPanelBounds>): QuestPanelBoundsInfo {
+  applyPanelBounds(patch: Partial<QuestPanelBounds>): QuestPanelBounds {
     const workArea = screen.getPrimaryDisplay().workArea;
     const width = QuestPanelWindow.clamp(
       patch.width ?? this.panelWidth,
@@ -145,34 +131,12 @@ export default class QuestPanelWindow extends BrowserWindow {
     this.panelY = y;
     this.panelHeight = height;
     this.panelWidth = width;
+    const bounds = { y, height, width };
     if (!this.isDestroyed()) {
-      this.setBounds({
-        x: workArea.x + workArea.width - width,
-        y,
-        width,
-        height,
-      });
+      this.setBounds({ x: workArea.x + workArea.width - width, y, width, height });
+      this.webContents.send(IpcConstants.QuestPanelBounds, bounds);
     }
-    const info = this.boundsInfo();
-    if (!this.isDestroyed()) {
-      this.webContents.send(IpcConstants.QuestPanelBounds, info);
-    }
-    return info;
-  }
-
-  private boundsInfo(): QuestPanelBoundsInfo {
-    const workArea = screen.getPrimaryDisplay().workArea;
-    return {
-      y: this.panelY,
-      height: this.panelHeight,
-      width: this.panelWidth,
-      minY: workArea.y,
-      maxY: workArea.y + workArea.height - this.panelHeight,
-      minHeight: MIN_HEIGHT,
-      maxHeight: workArea.height,
-      minWidth: MIN_WIDTH,
-      maxWidth: workArea.width,
-    };
+    return bounds;
   }
 
   sendData(data: QuestPanelData): void {

@@ -3,6 +3,9 @@ import {
   UserConfig,
   GameMode,
   GAME_MODE_LABELS,
+  DEFAULT_QUEST_PANEL_HOTKEY,
+  DEFAULT_QUEST_SCAN_HOTKEY,
+  DEFAULT_MAP_HOTKEY,
 } from "../../models/UserConfig";
 
 interface SettingsProps {
@@ -43,16 +46,6 @@ interface SettingsProps {
   onGameModeChange: (mode: GameMode) => void;
   showPerSlotPrice: boolean;
   onShowPerSlotPriceChange: (enabled: boolean) => void;
-  enableQuestPanel: boolean;
-  onEnableQuestPanelChange: (enabled: boolean) => void;
-  questPanelHotkey: string;
-  onQuestPanelHotkeyChange: (hotkey: string) => void;
-  eftLogsPath: string;
-  onEftLogsPathChange: (path: string) => void;
-  questScanHotkey: string;
-  onQuestScanHotkeyChange: (hotkey: string) => void;
-  mapHotkey: string;
-  onMapHotkeyChange: (hotkey: string) => void;
 }
 
 export default function Settings({
@@ -93,16 +86,6 @@ export default function Settings({
   onGameModeChange,
   showPerSlotPrice,
   onShowPerSlotPriceChange,
-  enableQuestPanel,
-  onEnableQuestPanelChange,
-  questPanelHotkey,
-  onQuestPanelHotkeyChange,
-  eftLogsPath,
-  onEftLogsPathChange,
-  questScanHotkey,
-  onQuestScanHotkeyChange,
-  mapHotkey,
-  onMapHotkeyChange,
 }: SettingsProps) {
   const [localSoundEnabled, setLocalSoundEnabled] = useState(soundEnabled);
   const [localSoundVolume, setLocalSoundVolume] = useState(soundVolume);
@@ -133,16 +116,25 @@ export default function Settings({
     useState(enableScreenCalibration);
   const [localGameMode, setLocalGameMode] = useState<GameMode>(gameMode);
   const [localShowPerSlotPrice, setLocalShowPerSlotPrice] = useState(showPerSlotPrice);
-  const [localEnableQuestPanel, setLocalEnableQuestPanel] = useState(enableQuestPanel);
-  const [localQuestPanelHotkey, setLocalQuestPanelHotkey] = useState(questPanelHotkey);
-  const [localEftLogsPath, setLocalEftLogsPath] = useState(eftLogsPath);
-  const [localQuestScanHotkey, setLocalQuestScanHotkey] = useState(questScanHotkey);
-  const [localMapHotkey, setLocalMapHotkey] = useState(mapHotkey);
+  // The quest-panel settings are read here rather than relayed through the
+  // price list, which has no use for them
+  const [localEnableQuestPanel, setLocalEnableQuestPanel] = useState(true);
+  const [localQuestPanelHotkey, setLocalQuestPanelHotkey] = useState(DEFAULT_QUEST_PANEL_HOTKEY);
+  const [localEftLogsPath, setLocalEftLogsPath] = useState("");
+  const [localQuestScanHotkey, setLocalQuestScanHotkey] = useState(DEFAULT_QUEST_SCAN_HOTKEY);
+  const [localMapHotkey, setLocalMapHotkey] = useState(DEFAULT_MAP_HOTKEY);
   const [syncToTracker, setSyncToTracker] = useState(true);
   useEffect(() => {
     window.electron
       .getUserConfig()
-      .then((config) => setSyncToTracker(config?.syncToTracker !== false))
+      .then((config) => {
+        setSyncToTracker(config?.syncToTracker !== false);
+        setLocalEnableQuestPanel(config?.enableQuestPanel ?? true);
+        setLocalQuestPanelHotkey(config?.questPanelHotkey ?? DEFAULT_QUEST_PANEL_HOTKEY);
+        setLocalEftLogsPath(config?.eftLogsPath ?? "");
+        setLocalQuestScanHotkey(config?.questScanHotkey ?? DEFAULT_QUEST_SCAN_HOTKEY);
+        setLocalMapHotkey(config?.mapHotkey ?? DEFAULT_MAP_HOTKEY);
+      })
       .catch(() => undefined);
   }, []);
   const [isValidatingApiKey, setIsValidatingApiKey] = useState(false);
@@ -223,26 +215,6 @@ export default function Settings({
   useEffect(() => {
     setLocalShowPerSlotPrice(showPerSlotPrice);
   }, [showPerSlotPrice]);
-
-  useEffect(() => {
-    setLocalEnableQuestPanel(enableQuestPanel);
-  }, [enableQuestPanel]);
-
-  useEffect(() => {
-    setLocalQuestPanelHotkey(questPanelHotkey);
-  }, [questPanelHotkey]);
-
-  useEffect(() => {
-    setLocalEftLogsPath(eftLogsPath);
-  }, [eftLogsPath]);
-
-  useEffect(() => {
-    setLocalQuestScanHotkey(questScanHotkey);
-  }, [questScanHotkey]);
-
-  useEffect(() => {
-    setLocalMapHotkey(mapHotkey);
-  }, [mapHotkey]);
 
   const handleSoundToggle = async (enabled: boolean) => {
     setLocalSoundEnabled(enabled);
@@ -636,34 +608,29 @@ export default function Settings({
 
   const handleQuestPanelToggle = async (enabled: boolean) => {
     setLocalEnableQuestPanel(enabled);
-    onEnableQuestPanelChange(enabled);
     await saveQuestPanelConfig({ enableQuestPanel: enabled });
   };
 
   const commitQuestPanelHotkey = async () => {
     const hotkey = localQuestPanelHotkey.trim() || "'";
     setLocalQuestPanelHotkey(hotkey);
-    onQuestPanelHotkeyChange(hotkey);
     await saveQuestPanelConfig({ questPanelHotkey: hotkey });
   };
 
   const commitQuestScanHotkey = async () => {
     const hotkey = localQuestScanHotkey.trim() || "]";
     setLocalQuestScanHotkey(hotkey);
-    onQuestScanHotkeyChange(hotkey);
     await saveQuestPanelConfig({ questScanHotkey: hotkey });
   };
 
   const commitMapHotkey = async () => {
     const hotkey = localMapHotkey.trim() || "[";
     setLocalMapHotkey(hotkey);
-    onMapHotkeyChange(hotkey);
     await saveQuestPanelConfig({ mapHotkey: hotkey });
   };
 
   const commitEftLogsPath = async () => {
     const path = localEftLogsPath.trim();
-    onEftLogsPathChange(path);
     await saveQuestPanelConfig({ eftLogsPath: path });
   };
 

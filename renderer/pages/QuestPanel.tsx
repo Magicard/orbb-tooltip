@@ -6,24 +6,13 @@ import type {
   QuestPanelQuest,
   QuestPanelObjective,
 } from "../../models/TaskData";
+import type { QuestPanelBounds, QuestScanStatus } from "../../models/QuestPanelWindow";
 
 // Slide-in quest tracker (think Questie for Tarkov). The main process sends
 // the data; this window only draws it. It is click-through except while the
 // cursor hovers it, when it takes the mouse: wheel scrolls the list, the top
 // strip drags the panel up/down, the bottom-left corner resizes it, the map
 // label opens a map picker and clicking a quest collapses it.
-
-type Bounds = {
-  y: number;
-  height: number;
-  width: number;
-  minY: number;
-  maxY: number;
-  minHeight: number;
-  maxHeight: number;
-  minWidth: number;
-  maxWidth: number;
-};
 
 type Drag = {
   kind: "move" | "resize";
@@ -94,16 +83,8 @@ export function QuestPanel() {
     });
   };
   const [opacity, setOpacity] = useState(0.95);
-  const [scanStatus, setScanStatus] = useState<{
-    active: boolean;
-    secondsLeft: number;
-    passes: number;
-    tasks: number;
-    updates: number;
-    newTasks: number;
-    endedAt: number | null;
-  } | null>(null);
-  const boundsRef = useRef<Bounds | null>(null);
+  const [scanStatus, setScanStatus] = useState<QuestScanStatus | null>(null);
+  const boundsRef = useRef<QuestPanelBounds | null>(null);
   const dragRef = useRef<Drag | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -121,25 +102,14 @@ export function QuestPanel() {
     );
     window.electron.receive(
       IpcConstants.QuestPanelBounds,
-      (_event: unknown, next: Bounds) => {
+      (_event: unknown, next: QuestPanelBounds) => {
         boundsRef.current = next;
       }
     );
     window.electron.requestScanStatus();
     window.electron.receive(
       IpcConstants.QuestPanelScanStatus,
-      (
-        _event: unknown,
-        status: {
-          active: boolean;
-          secondsLeft: number;
-          passes: number;
-          tasks: number;
-          updates: number;
-          newTasks: number;
-          endedAt: number | null;
-        }
-      ) => setScanStatus(status)
+      (_event: unknown, status: QuestScanStatus) => setScanStatus(status)
     );
     window.electron
       .getUserConfig()
@@ -253,6 +223,32 @@ export function QuestPanel() {
         : `Last raid: ${data.mapName}`
     : "Pick a map";
 
+  const newTasks = scanStatus?.newTasks ? `${scanStatus.newTasks} new` : null;
+  const scanner = scanStatus?.active
+    ? {
+        label: "Scanning",
+        tone: "",
+        title: undefined as string | undefined,
+        detail: [`${scanStatus.tasks} tasks`, newTasks, plural(scanStatus.updates, "update"), `${scanStatus.secondsLeft}s`]
+          .filter(Boolean)
+          .join(" · "),
+      }
+    : scanStatus?.endedAt
+      ? {
+          label: "Scanner off",
+          tone: scanStatus.updates > 0 ? "text-green-400" : "text-stone-500",
+          title: "What the last scan changed" as string | undefined,
+          detail: `last scan: ${[`${scanStatus.tasks} tasks`, newTasks, plural(scanStatus.updates, "update")]
+            .filter(Boolean)
+            .join(", ")}`,
+        }
+      : {
+          label: "Scanner off",
+          tone: "text-stone-600",
+          title: undefined as string | undefined,
+          detail: "open Tasks, click here",
+        };
+
   return (
     <ShowDoneContext.Provider value={showDone}>
     <DragContext.Provider value={dragApi}>
@@ -332,37 +328,13 @@ export function QuestPanel() {
               scanStatus?.active ? "bg-amber-400 animate-pulse" : "bg-stone-600"
             }`}
           />
-          {scanStatus?.active ? (
-            <>
-              <span>Scanning</span>
-              <span className="ml-auto tabular-nums normal-case tracking-normal">
-                {scanStatus.tasks} tasks
-                {scanStatus.newTasks > 0 && ` · ${scanStatus.newTasks} new`}
-                {` · ${plural(scanStatus.updates, "update")} · ${scanStatus.secondsLeft}s`}
-              </span>
-            </>
-          ) : scanStatus?.endedAt ? (
-            <>
-              <span>Scanner off</span>
-              <span
-                className={`ml-auto tabular-nums normal-case tracking-normal ${
-                  scanStatus.updates > 0 ? "text-green-400" : "text-stone-500"
-                }`}
-                title="What the last scan changed"
-              >
-                last scan: {scanStatus.tasks} tasks
-                {scanStatus.newTasks > 0 && `, ${scanStatus.newTasks} new`}
-                {`, ${plural(scanStatus.updates, "update")}`}
-              </span>
-            </>
-          ) : (
-            <>
-              <span>Scanner off</span>
-              <span className="ml-auto normal-case tracking-normal text-stone-600">
-                open Tasks, click here
-              </span>
-            </>
-          )}
+          <span>{scanner.label}</span>
+          <span
+            className={`ml-auto tabular-nums normal-case tracking-normal ${scanner.tone}`}
+            title={scanner.title}
+          >
+            {scanner.detail}
+          </span>
         </button>
       </div>
 
@@ -517,17 +489,7 @@ export function QuestPanel() {
                   key={t.name}
                   className="rounded bg-stone-800/70 px-2.5 py-1.5 flex items-baseline gap-2 whitespace-nowrap overflow-hidden"
                   title="Middle-click for the wiki"
-                  onMouseDown={(e) => {
-                    if (e.button === 1) e.preventDefault();
-                  }}
-                  onAuxClick={(e) => {
-                    if (e.button === 1) {
-                      e.preventDefault();
-                      window.electron.openExternal(
-                        `https://escapefromtarkov.fandom.com/wiki/${encodeURIComponent(t.name.trim().replace(/\s+/g, "_"))}`
-                      );
-                    }
-                  }}
+                  {...wikiProps(t.wiki)}
                 >
                   <span className="text-[15px] font-black text-white truncate">
                     {t.name}
@@ -608,6 +570,21 @@ export function QuestPanel() {
   );
 }
 
+// Middle-click opens a quest's wiki page, wherever it is drawn
+function wikiProps(url: string) {
+  return {
+    onMouseDown: (e: React.MouseEvent) => {
+      if (e.button === 1) e.preventDefault(); // no autoscroll cursor
+    },
+    onAuxClick: (e: React.MouseEvent) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        window.electron.openExternal(url);
+      }
+    },
+  };
+}
+
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
@@ -684,20 +661,12 @@ function Quest({
       data-quest-id={quest.id}
       // Click collapses, press and move reorders (see useQuestOrder)
       {...drag?.cardProps(quest.id)}
+      {...wikiProps(quest.wiki)}
       className={`group/quest relative rounded bg-stone-800/70 px-2.5 py-1.5 select-none ${
         drag?.draggingId === quest.id
           ? "opacity-60 ring-1 ring-stone-500 cursor-grabbing"
           : "active:cursor-grabbing"
       }`}
-      onMouseDown={(e) => {
-        if (e.button === 1) e.preventDefault(); // no autoscroll cursor
-      }}
-      onAuxClick={(e) => {
-        if (e.button === 1) {
-          e.preventDefault();
-          window.electron.openExternal(quest.wiki);
-        }
-      }}
     >
       <button
         className="w-full flex items-baseline gap-2 whitespace-nowrap overflow-hidden text-left"

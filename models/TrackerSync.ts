@@ -24,14 +24,6 @@ const FLUSH_DELAY_MS = 4000;
 const RATE_LIMIT_BACKOFF_MS = 15 * 60 * 1000;
 const ERROR_BACKOFF_MS = 3 * 60 * 1000;
 
-export type TrackerSyncStatus = {
-  enabled: boolean;
-  lastPushAt: number | null;
-  lastError: string | null;
-  pushedTasks: number;
-  pushedObjectives: number;
-};
-
 export default class TrackerSync {
   private token: string | null = null;
   private enabled = true;
@@ -46,12 +38,10 @@ export default class TrackerSync {
   private base: string | null = null;
   private blockedUntil = 0;
   private lastError: string | null = null;
-  private lastPushAt: number | null = null;
   // Token the remembered state belongs to (so a restart keeps it) and the
   // token every host refused writes for (so we stop asking until it changes)
   private stateToken: string | null = null;
   private rejectedToken: string | null = null;
-  public onStatus: ((status: TrackerSyncStatus) => void) | null = null;
 
   constructor(userDataPath?: string) {
     if (userDataPath) {
@@ -74,18 +64,8 @@ export default class TrackerSync {
     }
     // Writes refused for this token stay off until the token changes
     this.enabled = enabled && this.token !== this.rejectedToken;
-    this.report();
   }
 
-  status(): TrackerSyncStatus {
-    return {
-      enabled: this.enabled && !!this.token,
-      lastPushAt: this.lastPushAt,
-      lastError: this.lastError,
-      pushedTasks: this.pushedTasks.size,
-      pushedObjectives: this.pushedObjectives.size,
-    };
-  }
 
   queueTask(taskId: string, state: TrackerTaskState): void {
     if (!taskId || this.pushedTasks.get(taskId) === state) return;
@@ -166,13 +146,11 @@ export default class TrackerSync {
       }
       if (tasks.length > 0 || objectives.length > 0) {
         if (!this.lastError) {
-          this.lastPushAt = Date.now();
           log.info(
             `TarkovTracker sync: sent ${tasks.length} task state(s), ${objectives.length} objective update(s)`
           );
         }
         this.save();
-        this.report();
       }
     } finally {
       this.flushing = false;
@@ -181,6 +159,14 @@ export default class TrackerSync {
         setTimeout(() => this.schedule(), Math.max(FLUSH_DELAY_MS, this.blockedUntil - Date.now()));
       }
     }
+  }
+
+  // Stop writing for a while and remember why
+  private fail(backoffMs: number, message: string): false {
+    this.blockedUntil = Date.now() + backoffMs;
+    this.lastError = message;
+    log.warn(message);
+    return false;
   }
 
   // POST to the first host that accepts the token; remembers that host
@@ -207,28 +193,25 @@ export default class TrackerSync {
           continue;
         }
         if (res.status === 429) {
-          this.blockedUntil = Date.now() + RATE_LIMIT_BACKOFF_MS;
-          this.lastError = "TarkovTracker write quota reached - pausing sync for 15 minutes";
-          log.warn(this.lastError);
-          this.report();
-          return false;
+          return this.fail(
+            RATE_LIMIT_BACKOFF_MS,
+            "TarkovTracker write quota reached - pausing sync for 15 minutes"
+          );
         }
         if (!res.ok) {
-          this.blockedUntil = Date.now() + ERROR_BACKOFF_MS;
-          this.lastError = `TarkovTracker returned ${res.status} for ${route} - retrying in a few minutes`;
-          log.warn(this.lastError);
-          this.report();
-          return false;
+          return this.fail(
+            ERROR_BACKOFF_MS,
+            `TarkovTracker returned ${res.status} for ${route} - retrying in a few minutes`
+          );
         }
         this.base = base;
         this.lastError = null;
         return true;
       } catch (error) {
-        this.blockedUntil = Date.now() + ERROR_BACKOFF_MS;
-        this.lastError = `TarkovTracker unreachable: ${String((error as Error)?.message ?? error)}`;
-        log.warn(this.lastError);
-        this.report();
-        return false;
+        return this.fail(
+          ERROR_BACKOFF_MS,
+          `TarkovTracker unreachable: ${String((error as Error)?.message ?? error)}`
+        );
       } finally {
         clearTimeout(timeout);
       }
@@ -241,14 +224,10 @@ export default class TrackerSync {
       this.lastError =
         "TarkovTracker rejected the write - the API token needs the WP (write progress) permission";
       log.warn(this.lastError);
-      this.report();
     }
     return false;
   }
 
-  private report(): void {
-    this.onStatus?.(this.status());
-  }
 
   private load(): void {
     if (!this.file || !fs.existsSync(this.file)) return;
@@ -261,7 +240,6 @@ export default class TrackerSync {
         this.pushedObjectives.set(id, update as TrackerObjectiveUpdate);
       }
       this.base = typeof data.base === "string" ? data.base : null;
-      this.lastPushAt = typeof data.lastPushAt === "number" ? data.lastPushAt : null;
       this.stateToken = typeof data.token === "string" ? data.token : null;
     } catch (error) {
       log.warn("Failed to load tracker sync state:", error);
@@ -277,7 +255,6 @@ export default class TrackerSync {
           tasks: Object.fromEntries(this.pushedTasks),
           objectives: Object.fromEntries(this.pushedObjectives),
           base: this.base,
-          lastPushAt: this.lastPushAt,
           token: this.stateToken,
         })
       );

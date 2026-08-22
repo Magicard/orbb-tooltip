@@ -694,11 +694,6 @@ static std::string scanImageFile(tesseract::TessBaseAPI& tess, const std::string
 	return result;
 }
 
-static std::string scanScreenRegionUnused(tesseract::TessBaseAPI& tess, int x, int y, int w, int h) {
-	(void)tess; (void)x; (void)y; (void)w; (void)h;
-	return std::string();
-}
-
 static void rtrim(std::string& s) {
 	// Define the characters to trim (common whitespaces)
 	const std::string whitespaces = " \t\n\r\f\v";

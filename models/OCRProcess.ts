@@ -270,35 +270,6 @@ export default class OCRProcess {
   // Ctrl+wheel events from the helper's low-level hook (see ocr_cpp)
   public onWheel: ((delta: number) => void) | null = null;
 
-  // Is the native helper running and talking to us? (it heartbeats every 5s)
-  isHelperHealthy(): boolean {
-    return (
-      !!this.ocrProcess &&
-      !this.ocrProcess.killed &&
-      Date.now() - this.lastHelperOutput < 20 * 1000
-    );
-  }
-
-  // Make sure the helper is alive and its wheel hook is in the wanted state;
-  // returns what had to be corrected, for logging
-  ensureHelperReady(): string[] {
-    const fixed: string[] = [];
-    if (!this.ocrProcess || this.ocrProcess.killed) {
-      fixed.push("helper was not running - restarted");
-      this.restartHelper?.();
-      return fixed;
-    }
-    if (!this.isHelperHealthy()) {
-      fixed.push("helper had gone quiet - restarted");
-      this.lastHelperOutput = Date.now();
-      this.ocrProcess.kill(); // the close handler respawns it
-      return fixed;
-    }
-    // Re-assert the hook: cheap, and covers a command lost on the way
-    this.ocrProcess.stdin.write(this.wheelHookWanted ? "WHEELHOOK ON\n" : "WHEELHOOK OFF\n");
-    return fixed;
-  }
-
   // Enable/disable the helper's Ctrl+wheel hook (swallows those events)
   setWheelHookEnabled(enabled: boolean): void {
     this.wheelHookWanted = enabled;

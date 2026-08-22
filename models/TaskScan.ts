@@ -148,10 +148,6 @@ export default class TaskScan {
     );
   }
 
-  getObjectives(): Map<string, ScannedObjective> {
-    return this.objectives;
-  }
-
   getLastScan(): { at: number; count: number } {
     return { at: this.lastScanAt, count: this.lastScanCount };
   }
@@ -209,12 +205,6 @@ export default class TaskScan {
       this.save();
     }
     return events;
-  }
-
-  // Completion read off the Tasks screen for one objective of a task:
-  // true / false when its row was seen, undefined when it never was
-  doneFor(taskId: string, objectiveText: string): boolean | undefined {
-    return this.stateFor(taskId, objectiveText)?.done;
   }
 
   // The screen has not changed since the last read. That is not a second
@@ -348,7 +338,7 @@ export default class TaskScan {
       if (
         row.length >= 4 &&
         !texts.some((t) => PERCENT_PATTERN.test(t)) &&
-        !isTraderListRow(texts)
+        traderRowTail(texts) === null
       ) {
         // The row starts with an icon and may end with the tick itself,
         // both of which OCR turns into a stray short token
@@ -370,29 +360,24 @@ export default class TaskScan {
       // which shows no progress bar) ----
       let percentIdx = texts.findIndex((t) => PERCENT_PATTERN.test(t));
       let percent: number | undefined;
-      // Operational rows on the trader screen end with a countdown, and the
-      // trader's task header ends with a loyalty icon read as a stray letter
-      let tail = texts.length;
-      while (
-        tail > 2 &&
-        (/^\d{1,2}:\d{2}(:\d{2})?$/.test(texts[tail - 1]) || STRAY_TOKEN.test(texts[tail - 1]))
-      ) {
-        tail--;
-      }
+      const traderTail = traderRowTail(texts);
       if (percentIdx >= 2) {
         percent = Number(PERCENT_PATTERN.exec(texts[percentIdx])![1]);
         if (!(percent >= 0 && percent <= 100)) continue;
-      } else if (percentIdx < 0 && tail >= 2 && tail <= TRADER_ROW_MAX_TOKENS && TRADER_STATUS_PATTERN.test(texts[tail - 1])) {
-        percentIdx = tail;
+      } else if (percentIdx < 0 && traderTail !== null) {
+        percentIdx = traderTail;
       } else {
         continue;
       }
-      const statusIdx = texts
-        .slice(0, percentIdx)
-        .map((t, i) => (STATUS_PATTERN.test(t) ? i : -1))
-        .filter((i) => i >= 0)
-        .pop();
-      if (statusIdx === undefined || statusIdx < 1) continue;
+      // Last status word before the percent column
+      let statusIdx = -1;
+      for (let i = percentIdx - 1; i >= 1; i--) {
+        if (STATUS_PATTERN.test(texts[i])) {
+          statusIdx = i;
+          break;
+        }
+      }
+      if (statusIdx < 1) continue;
       const status = texts[statusIdx];
 
       // Location is the longest trailing run of words before the status
@@ -746,8 +731,11 @@ function stripStrayTokens<T>(tokens: T[], text: (t: T) => string = (t) => String
 }
 
 // "<name> [location] <status> [countdown / stray icon]" as the trader's task
-// list shows it - short, and ending in one of the exact status words
-function isTraderListRow(texts: string[]): boolean {
+// list shows it - short, and ending in one of the exact status words.
+// Operational rows end with a countdown and a trader's task header with a
+// loyalty icon read as a stray letter, so both are trimmed first. Returns
+// the index just past the status word, or null if this is not such a row.
+function traderRowTail(texts: string[]): number | null {
   let tail = texts.length;
   while (
     tail > 2 &&
@@ -755,7 +743,9 @@ function isTraderListRow(texts: string[]): boolean {
   ) {
     tail--;
   }
-  return tail >= 2 && tail <= TRADER_ROW_MAX_TOKENS && TRADER_STATUS_PATTERN.test(texts[tail - 1]);
+  const isTraderRow =
+    tail >= 2 && tail <= TRADER_ROW_MAX_TOKENS && TRADER_STATUS_PATTERN.test(texts[tail - 1]);
+  return isTraderRow ? tail : null;
 }
 
 // "activel", "active!", "Active" are all the same status

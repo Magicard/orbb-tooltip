@@ -6,10 +6,19 @@ import type { MapWindowData, MapWindowBounds } from "../../models/MapWindow";
 // bar moves the window and the bottom-right corner resizes it. The window
 // is click-through until hovered (same scheme as the quest panel).
 
-type Drag =
-  | { kind: "move"; startX: number; startY: number; winX: number; winY: number }
-  | { kind: "resize"; startX: number; startY: number; width: number; height: number }
-  | { kind: "pan"; startX: number; startY: number; panX: number; panY: number };
+// Where the pointer went down, and what the window and image looked like at
+// that moment - the three drags all move something relative to that snapshot
+type Drag = {
+  kind: "move" | "resize" | "pan";
+  startX: number;
+  startY: number;
+  winX: number;
+  winY: number;
+  width: number;
+  height: number;
+  panX: number;
+  panY: number;
+};
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 8;
@@ -78,8 +87,19 @@ export function MapView() {
     setZoom(next);
   };
 
-  const startDrag = (drag: Drag) => (e: React.PointerEvent) => {
-    dragRef.current = drag;
+  const startDrag = (kind: Drag["kind"]) => (e: React.PointerEvent) => {
+    const box = boundsRef.current ?? { x: 0, y: 0, width: 800, height: 600 };
+    dragRef.current = {
+      kind,
+      startX: e.screenX,
+      startY: e.screenY,
+      winX: box.x,
+      winY: box.y,
+      width: box.width,
+      height: box.height,
+      panX: pan.x,
+      panY: pan.y,
+    };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     e.preventDefault();
   };
@@ -106,8 +126,6 @@ export function MapView() {
     if (drag.kind !== "pan") window.electron.setMapBounds({}, true);
   };
 
-  const bounds = () => boundsRef.current ?? { x: 0, y: 0, width: 800, height: 600 };
-
   return (
     <div
       className="relative h-full w-full flex flex-col rounded-lg border border-stone-700 bg-stone-900 text-stone-200 font-['Bender'] tracking-wide overflow-hidden transition-opacity duration-150"
@@ -116,9 +134,7 @@ export function MapView() {
       {/* TITLE BAR (drag to move) */}
       <div
         className="shrink-0 h-7 flex items-center gap-2 px-2 cursor-grab active:cursor-grabbing select-none bg-stone-800/80 border-b border-stone-700"
-        onPointerDown={(e) =>
-          startDrag({ kind: "move", startX: e.screenX, startY: e.screenY, winX: bounds().x, winY: bounds().y })(e)
-        }
+        onPointerDown={startDrag("move")}
         onPointerMove={onDragMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
@@ -149,9 +165,7 @@ export function MapView() {
         ref={viewportRef}
         className="relative flex-1 min-h-0 overflow-hidden cursor-move bg-[#141210]"
         onWheel={onWheel}
-        onPointerDown={(e) =>
-          startDrag({ kind: "pan", startX: e.screenX, startY: e.screenY, panX: pan.x, panY: pan.y })(e)
-        }
+        onPointerDown={startDrag("pan")}
         onPointerMove={onDragMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
@@ -186,9 +200,7 @@ export function MapView() {
       <div
         className="absolute right-0 bottom-0 w-5 h-5 cursor-nwse-resize flex items-end justify-end p-0.5 text-stone-600 hover:text-stone-300 select-none"
         title="Drag to resize"
-        onPointerDown={(e) =>
-          startDrag({ kind: "resize", startX: e.screenX, startY: e.screenY, width: bounds().width, height: bounds().height })(e)
-        }
+        onPointerDown={startDrag("resize")}
         onPointerMove={onDragMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}

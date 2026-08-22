@@ -77,10 +77,6 @@ export default class MapWindow extends BrowserWindow {
     return this.mapVisible;
   }
 
-  getMapBounds(): MapWindowBounds {
-    return { ...this.bounds };
-  }
-
   setInteractive(enabled: boolean): void {
     this.clickThrough.set(enabled);
   }

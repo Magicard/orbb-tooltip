@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useRef, useState } from "react";
 import type { QuestPanelQuest } from "../../models/TaskData";
 
 // The order the player dragged their quests into, kept between sessions.
@@ -142,8 +142,5 @@ export function useQuestOrder(): {
     [beginDrag]
   );
 
-  // Stable identity, so a data push does not re-render every card
-  const dragApi = useMemo<DragApi>(() => ({ draggingId, cardProps }), [draggingId, cardProps]);
-
-  return { applyOrder, dragApi };
+  return { applyOrder, dragApi: { draggingId, cardProps } };
 }
