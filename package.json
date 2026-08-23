@@ -1,7 +1,7 @@
 {
   "name": "tarkov-price-tooltip",
   "productName": "tarkov-price-tooltip",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "ORBB ToolTip - in-game Escape from Tarkov price and quest overlay",
   "main": "./.webpack/main",
   "scripts": {
