@@ -3,6 +3,9 @@ import path from "path";
 import log from "electron-log";
 import MiniSearch from "minisearch";
 import type { CatalogObjective, CatalogTask } from "./TaskData";
+import { normalizeName } from "./taskText";
+
+export { normalizeName };
 
 // Reads the game's Tasks screen from an on-demand full-screen OCR (see
 // ocr_cpp "SCAN"): task rows ("<name>  <location>  active  60%") and, for
@@ -49,6 +52,13 @@ export type ScannedTask = {
 const UNKNOWN_CONFIRMATIONS = 2;
 // How long a row thrown away by hand stays thrown away - about one rotation
 const DISMISSAL_MS = 24 * 3600 * 1000;
+// How long an in-raid notification speaks for. Comfortably longer than a raid
+// and the hand-in after it, far shorter than "for ever".
+const TOAST_TTL_MS = 6 * 3600 * 1000;
+// What a well-formed row is worth against repeated sightings, and how many
+// sightings still count for anything, when two readings disagree
+const WELL_FORMED_WEIGHT = 3;
+const SIGHTINGS_WEIGHT_CAP = 4;
 // A session has to have read something this many times before one sighting of
 // anything else counts as suspiciously few
 const SESSION_READS_TO_JUDGE = 4;
@@ -186,18 +196,18 @@ function clockMs(text: string): number | null {
   return ((hours * 60 + minutes) * 60 + seconds) * 1000;
 }
 
+// How much there is to go on for a reading of a rotating task: the game laid
+// the row out properly, and how many times it has been read the same way
+function evidenceFor(task: ScannedTask): number {
+  return (task.wellFormed ? WELL_FORMED_WEIGHT : 0) + Math.min(task.seen ?? 1, SIGHTINGS_WEIGHT_CAP);
+}
+
 // Objective text is a sentence; a change line only has room for the start
 function shorten(text: string, max = 44): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-export function normalizeName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/\[.*?\]/g, "") // "[Season PvP]" suffixes
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
+
 
 export default class TaskScan {
   private tasks = new Map<string, ScannedTask>();
@@ -242,7 +252,7 @@ export default class TaskScan {
     const task = this.tasks.get(key);
     if (!task) return false;
     this.tasks.delete(key);
-    this.dismissed.set(key, Date.now() + DISMISSAL_MS);
+    this.dismissed.set(normalizeName(task.name), Date.now() + DISMISSAL_MS);
     log.info(`Tasks screen scan: "${task.name}" thrown away by hand`);
     this.save();
     return true;
@@ -269,6 +279,11 @@ export default class TaskScan {
     for (const [key, reads] of this.sessionReads) {
       const task = this.tasks.get(key);
       if (!task || task.taskId || reads > 1 || known.has(key)) continue;
+      // Steps of its own are corroboration a misread does not get: they are
+      // only ever attributed to a row the detail pane was open on. A countdown
+      // is not - a misread row on the OPERATIONAL tab inherits its neighbour's
+      // just as easily - so that alone does not save it.
+      if ((task.objectives?.length ?? 0) > 0) continue;
       log.info(`Tasks screen scan: "${task.name}" was read once in ${busiest} passes - dropping it`);
       this.tasks.delete(key);
       dropped = true;
@@ -281,11 +296,16 @@ export default class TaskScan {
     return { at: this.lastScanAt, count: this.lastScanCount };
   }
 
+  // What an in-raid notification said about this task, while it still means
+  // something. A "subtask completed" is about the raid it arrived in; left to
+  // stand it would go on ticking an objective off every raid after it.
   toastFor(taskId: string | null, name: string): ToastState | undefined {
-    return (
-      (taskId ? this.toasts.get(taskId) : undefined) ??
-      this.toasts.get(normalizeName(name))
-    );
+    const key = taskId && this.toasts.has(taskId) ? taskId : normalizeName(name);
+    const state = this.toasts.get(key);
+    if (!state) return undefined;
+    if (Date.now() - state.at <= TOAST_TTL_MS) return state;
+    this.toasts.delete(key);
+    return undefined;
   }
 
   // Parse a bottom-right region scan for notification toasts; returns the
@@ -413,7 +433,16 @@ export default class TaskScan {
     // A trader's list ends with an OPERATIONAL TASKS section. The cards under
     // it are the rotating ones, whose names are short and generic enough
     // ("Elimination") that nothing else about the row would give them away.
-    const operationalHeading = words.find((w) => /^operationa?l?$/i.test(w.text));
+    //
+    // "OPERATIONAL" on its own is not enough to go on: real quests are called
+    // things like "Operation Aquarius", and taking the first word on the page
+    // that starts that way would hand every card below a quest name the same
+    // free pass the heading gives. A heading is followed by the word TASKS.
+    const operationalHeading = words.find((word, i) => {
+      if (!/^operationa?l?$/i.test(word.text)) return false;
+      const next = words[i + 1];
+      return next !== undefined && /^tasks?:?$/i.test(next.text);
+    });
     const objectivePane = objectivesHeading
       ? {
           top: objectivesHeading.top,
@@ -488,17 +517,22 @@ export default class TaskScan {
       const joined = texts.join(" ");
 
       // ---- objective row: "... 3/5" (or "3 / 5" split into words) ----
-      let countMatch: RegExpExecArray | null = null;
+      let counter: { count: number; total: number } | null = null;
+      // How many words of the row the counter took up, so exactly those come
+      // off the text rather than a regex guessing at where it started
+      let counterWords = 0;
       for (const tail of [1, 2, 3]) {
-        const candidate = texts.slice(-tail).join("").replace(/\s+/g, "");
-        countMatch = COUNT_PATTERN.exec(candidate);
-        if (countMatch) break;
+        counter = countIn(texts.slice(-tail).join("").replace(/\s+/g, ""));
+        if (counter) {
+          counterWords = tail;
+          break;
+        }
       }
-      if (countMatch && row.length > 3) {
-        const count = Number(countMatch[1]);
-        const total = Number(countMatch[2]);
-        if (total > 0 && count <= total) {
-          const text = stripStrayTokens(stripTrailingCount(joined).split(/\s+/)).join(" ");
+      if (counter && row.length > 3) {
+        const { count, total } = counter;
+        {
+          const said = texts.slice(0, texts.length - counterWords).join(" ");
+          const text = stripStrayTokens(stripTrailingCount(said).split(/\s+/)).join(" ");
           const key = normalizeName(text);
           // Rows that swallowed a neighbour (a status word or percent in
           // the middle) are not objectives; the text-keyed map is only a
@@ -666,7 +700,7 @@ export default class TaskScan {
       if (!resolved.taskId && !operational(reading) && !this.knowsUnknown(resolved.name)) {
         continue;
       }
-      if (!resolved.taskId && this.isDismissed(unknownKey(resolved.name, location))) continue;
+      if (!resolved.taskId && this.isDismissed(resolved.name)) continue;
       const key = resolved.taskId
         ? `id:${resolved.taskId}`
         : this.keyForUnknown(resolved.name, location);
@@ -722,6 +756,7 @@ export default class TaskScan {
       taskRows++;
     }
 
+    const rowTops = [...new Set(rows.map((row) => rowBounds(row).top))].sort((a, b) => a - b);
     const claimed = this.attributeToTasks(
       // A step of the open task sits between the Objective(s) and Rewards
       // headings and starts at the same margin. Everything else on those
@@ -735,6 +770,7 @@ export default class TaskScan {
           )
         : [],
       taskRowsAt,
+      rowTops,
       catalog,
       changes
     );
@@ -764,8 +800,12 @@ export default class TaskScan {
   // The objective rows on screen all belong to the one task that is open,
   // so find the active task whose objectives they match best and record
   // each matched row's done / not-done state for it
-  // Did the player throw this reading away recently?
-  private isDismissed(key: string): boolean {
+  // Did the player throw this reading away recently? Keyed by the name alone,
+  // because the row that comes back a second later can carry a different
+  // location - the trader's list shows none - and it is still the same card
+  // the player just threw away.
+  private isDismissed(name: string): boolean {
+    const key = normalizeName(name);
     const until = this.dismissed.get(key);
     if (until === undefined) return false;
     if (until > Date.now()) return true;
@@ -806,6 +846,7 @@ export default class TaskScan {
   private attributeToTasks(
     objectiveRows: (Placed & ScannedTaskObjective)[],
     taskRowsAt: (Placed & { key: string })[],
+    rowTops: number[],
     catalog: CatalogTask[],
     changes: string[]
   ): { updates: number; rows: Set<Placed & ScannedTaskObjective> } {
@@ -820,6 +861,30 @@ export default class TaskScan {
     // of overlap: a row from the other pane that picked up a stray word can
     // reach into this one, and only the pane that contains the whole line is
     // really the one it belongs to.
+    // How far apart this screen puts its task rows, so a hole the size of one
+    // can be recognised. The closest two rows ever sit is the list's spacing:
+    // an open task's detail pushes the rows below it apart, and a row that
+    // failed to read leaves a gap of two, so anything but the smallest gap is
+    // describing something other than the spacing.
+    const tops = taskRowsAt.map((row) => row.top).sort((a, b) => a - b);
+    const gaps = tops
+      .slice(1)
+      .map((top, i) => top - tops[i])
+      .filter((gap) => gap >= MIN_ROW_PITCH_PX);
+    const pitch = gaps.length > 0 ? Math.min(...gaps) : 0;
+
+    // The row the game has open is drawn on a light background with the task's
+    // own artwork behind it, which makes it the one row on the screen OCR is
+    // most likely to miss altogether. Its steps would then fall to whichever
+    // row is above it, filing one task's work under its neighbour. A gap the
+    // size of a row between the owner and whatever comes next is that missing
+    // row, and nothing may be attributed across it.
+    const rowMissingBelow = (top: number): boolean => {
+      if (pitch <= 0) return false;
+      const next = rowTops.find((other) => other > top + 1);
+      return next !== undefined && next - top > pitch * MISSING_ROW_SLACK;
+    };
+
     const ownerOf = (line: Placed): ScannedTask | undefined => {
       let best: (typeof taskRowsAt)[number] | null = null;
       for (const row of taskRowsAt) {
@@ -828,7 +893,8 @@ export default class TaskScan {
         if (shared < (line.right - line.left) * PANE_COVERAGE) continue;
         if (!best || row.top > best.top) best = row;
       }
-      return best ? this.tasks.get(best.key) : undefined;
+      if (!best || rowMissingBelow(best.top)) return undefined;
+      return this.tasks.get(best.key);
     };
 
     // A task no catalog knows still belongs to a trader, and the screen only
@@ -1002,6 +1068,14 @@ export default class TaskScan {
     for (const m of [ANY_LOCATION, ...mapNames]) locations.set(wordSetKey(m), m);
     let changed = false;
     for (const [key, task] of [...this.tasks.entries()]) {
+      // Rotated out while the app was closed. Left in place it would go on
+      // showing, and a fresh daily of the same name would be grafted onto it
+      // along with whatever map it used to be on.
+      if (!task.taskId && task.expiresAt !== undefined && task.expiresAt < Date.now()) {
+        this.tasks.delete(key);
+        changed = true;
+        continue;
+      }
       const resolved = resolveTaskName(
         index,
         catalog,
@@ -1050,6 +1124,10 @@ export default class TaskScan {
         (other) => other !== reading && this.tasks.has(other.key) && isMisreadOf(reading.name, other.name)
       );
       if (!better) continue;
+      // Length alone does not settle which reading is the good one: a row that
+      // merged with the line under it comes out longer than the name it
+      // swallowed. Whichever has the better reason to be believed survives.
+      if (evidenceFor(reading) > evidenceFor(better)) continue;
       log.info(`Tasks screen scan: "${reading.name}" is "${better.name}" read badly - dropping it`);
       better.objectives = better.objectives ?? reading.objectives;
       better.expiresAt = better.expiresAt ?? reading.expiresAt;
@@ -1167,6 +1245,11 @@ const TABLE_HEADINGS = ["task", "location", "status"];
 const TABLE_MARGIN_PX = 40;
 // How much of a line a task row has to cover before it can own it
 const PANE_COVERAGE = 0.5;
+// How much bigger than the list's own row spacing a gap has to be before it is
+// taken as a row that failed to read rather than ordinary padding
+const MISSING_ROW_SLACK = 1.25;
+// Two "rows" closer than this are one row read twice, not the list's spacing
+const MIN_ROW_PITCH_PX = 30;
 // How far a card can sit from a section heading and still be under it
 const SECTION_COLUMN_PX = 80;
 
@@ -1191,15 +1274,23 @@ function rowBounds(row: Word[]): { top: number; left: number; right: number; cen
 // sentence is lost with it. Split after a status word when what follows starts
 // a long way to the right and is not this row's own progress column.
 function splitAcrossPanes(row: Word[]): Word[][] {
+  // The row's own columns, and only those. An icon is not one of them: the
+  // other pane opens with one, and keeping it on this side would stretch the
+  // row right up to the pane it is trying to get away from.
+  const ownColumn = (w: Word) => PERCENT_PATTERN.test(w.text) || COUNTDOWN_TOKEN.test(w.text);
   for (let i = 0; i < row.length - 1; i++) {
     if (!TRADER_STATUS_PATTERN.test(row[i].text)) continue;
-    if (row[i + 1].left - (row[i].left + row[i].width) < PANE_GAP_PX) continue;
-    const rest = row.slice(i + 1);
-    const ownColumns = rest.every(
-      (w) => PERCENT_PATTERN.test(w.text) || COUNTDOWN_TOKEN.test(w.text) || STRAY_TOKEN.test(w.text)
-    );
-    if (ownColumns) continue;
-    return [row.slice(0, i + 1), ...splitAcrossPanes(rest)];
+    // Whatever follows the status and is still one of the row's own columns -
+    // its percentage, its countdown, the debris of a progress bar - belongs to
+    // this row, however far right it sits. The pane starts after those.
+    let edge = i + 1;
+    while (edge < row.length && ownColumn(row[edge])) edge++;
+    if (edge >= row.length) continue;
+    // Measured from the status word, not from the last thing kept: the other
+    // pane usually opens with an icon, which is stray enough to look like one
+    // of this row's own columns and would hide the gap behind it.
+    if (row[edge].left - (row[i].left + row[i].width) < PANE_GAP_PX) continue;
+    return [row.slice(0, edge), ...splitAcrossPanes(row.slice(edge))];
   }
   return [row];
 }
@@ -1407,6 +1498,37 @@ function traderRowTail(texts: string[]): number | null {
 function statusKind(status: string): string {
   const m = /^(activ|comple|finish|lock|fail|avail|done)/i.exec(status);
   return m ? m[1].toLowerCase() : status.toLowerCase();
+}
+
+// A counter sits at the end of an objective row, drawn over the progress bar
+// the game paints behind it, and the bar's edge is read as part of it: "1/5"
+// comes back as "Ml v5", or as "Ml" and "v/s" either side of the bar. Only the
+// characters that stand in for a digit or a slash are put back, and what comes
+// out still has to read as a counter at the very end of the row - so an
+// objective's own words cannot turn into one.
+const COUNTER_LOOKALIKES: [RegExp, string][] = [
+  [/[lI|!]/g, "1"],
+  [/[OoDQ@]/g, "0"],
+  [/[Ss]/g, "5"],
+  [/[vVyY\\]/g, "/"],
+];
+const REPAIRED_COUNT = /(\d{1,4})\/+(\d{1,4})$/;
+
+function countIn(candidate: string): { count: number; total: number } | null {
+  const strict = COUNT_PATTERN.exec(candidate);
+  let read: [string, string] | null = strict ? [strict[1], strict[2]] : null;
+  if (!read) {
+    const repaired = COUNTER_LOOKALIKES.reduce(
+      (text, [wrong, right]) => text.replace(wrong, right),
+      candidate
+    );
+    const loose = REPAIRED_COUNT.exec(repaired);
+    read = loose ? [loose[1], loose[2]] : null;
+  }
+  if (!read) return null;
+  const count = Number(read[0]);
+  const total = Number(read[1]);
+  return total > 0 && count <= total ? { count, total } : null;
 }
 
 function stripTrailingCount(text: string): string {

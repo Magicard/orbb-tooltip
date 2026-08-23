@@ -68,12 +68,17 @@ export default class TrackerSync {
 
 
   queueTask(taskId: string, state: TrackerTaskState): void {
+    // Nothing may pile up while there is nowhere to send it: a backlog built
+    // over weeks without a token would go out in one burst the moment one is
+    // pasted in - possibly for a different account than it was gathered on
+    if (!this.canSend()) return;
     if (!taskId || this.pushedTasks.get(taskId) === state) return;
     this.pendingTasks.set(taskId, state);
     this.schedule();
   }
 
   queueObjective(objectiveId: string, update: TrackerObjectiveUpdate): void {
+    if (!this.canSend()) return;
     if (!objectiveId) return;
     const previous = this.pushedObjectives.get(objectiveId);
     const next: TrackerObjectiveUpdate = {};
@@ -104,8 +109,14 @@ export default class TrackerSync {
     this.schedule();
   }
 
+  // Is there anywhere for a finding to go? Held is not part of it: a session
+  // holds its writes on purpose and releases them at the end.
+  private canSend(): boolean {
+    return this.enabled && this.token !== null;
+  }
+
   private schedule(): void {
-    if (!this.enabled || !this.token || this.held || this.timer) return;
+    if (!this.canSend() || this.held || this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.flush();

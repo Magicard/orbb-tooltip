@@ -54,6 +54,13 @@ export default class OCRProcess {
   protected scanTimer: NodeJS.Timeout | null = null;
   protected user32: koffi.IKoffiLib;
   protected Point: koffi.IKoffiCType;
+  // The item the tooltip is showing, for anything that acts on what you are
+  // pointing at rather than on what it says
+  private hovered: Item | null = null;
+
+  getHoveredItem(): Item | null {
+    return this.hovered;
+  }
 
   public setPriceListWindow(priceListWindow: BrowserWindow): void {
     this.priceListWindow = priceListWindow;
@@ -411,6 +418,7 @@ export default class OCRProcess {
 
       if (incomingData === "MOUSEMOVE") {
         this.tooltipAnchor = null;
+        this.hovered = null;
         if (this.tooltipWindow) {
           this.tooltipWindow.webContents.send(
             IpcConstants.NewTooltipItem,
@@ -524,6 +532,7 @@ export default class OCRProcess {
               );
             }
 
+            this.hovered = item;
             if (this.tooltipWindow) {
               this.tooltipWindow.webContents.send(
                 IpcConstants.NewTooltipItem,

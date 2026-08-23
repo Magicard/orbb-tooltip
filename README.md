@@ -133,6 +133,7 @@ Counters like "3/5" and ticks inside a quest aren't in the logs — they're read
 | **`]`** | Start / stop reading the game's Tasks screen (changeable) |
 | **Ctrl + wheel** | Scroll the quest panel from anywhere while it's open |
 | **Middle-click a quest** | Open its page on the wiki |
+| **Ctrl + middle-click an item** | Open its calibre's ammo chart on eft-ammo.com |
 | **Press and drag a quest** | Reorder the list (remembered) |
 | **F12** | Developer tools |
 

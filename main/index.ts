@@ -38,6 +38,7 @@ import TaskScan from "../models/TaskScan";
 import MapWindow from "../models/MapWindow";
 import TrackerSync from "../models/TrackerSync";
 import { OPERATIONAL_ID_PREFIX, type QuestChange } from "../models/TaskData";
+import { ammoChartUrl } from "../models/ammoCharts";
 import koffi from "koffi";
 
 // Hotkey registration functions
@@ -707,7 +708,11 @@ try {
 
     // force = read the screen even if it looks unchanged (first pass of a
     // session: the helper's baseline may be from a previous session)
-    async function scanTasksScreenOnce(force = false): Promise<number> {
+    // Bumped whenever a session starts, so a read still in flight when one
+    // ends can tell that it belongs to a session nobody is watching any more
+    let scanGeneration = 0;
+
+    async function scanTasksScreenOnce(force = false, generation = scanGeneration): Promise<number> {
       if (!ocr || scanInProgress) return 0;
       scanInProgress = true;
       try {
@@ -727,6 +732,10 @@ try {
           taskScan.confirmLastRead();
           return -1;
         }
+        // The session was stopped while this read was in the helper. Applying
+        // it now would slip rows in behind endSession's back, where nothing
+        // is left to judge them.
+        if (generation !== scanGeneration) return 0;
         const passStartedAt = Date.now();
         const activeIds = [...(gameLog?.getQuestEvents() ?? new Map()).entries()]
           .filter(([, e]) => e.status === "started")
@@ -864,6 +873,7 @@ try {
       // Everything this session learns goes to TarkovTracker in one round
       // when it finishes, rather than a trickle of writes while you scroll
       getTrackerSync().hold();
+      scanGeneration++;
       taskScan?.beginSession();
       scanSessionUpdates = 0;
       scanSessionNewTasks = 0;
@@ -882,7 +892,7 @@ try {
           ? attempts === 0
           : attempts % SCAN_FORCED_EVERY === 0;
         attempts++;
-        const found = await scanTasksScreenOnce(forceRead);
+        const found = await scanTasksScreenOnce(forceRead, scanGeneration);
         // -1 = screen unchanged: nothing new to learn; it only counts as an
         // empty pass when the last real read was empty too (the player has
         // left the Tasks screen and is sitting still somewhere else)
@@ -1088,10 +1098,11 @@ try {
     }
 
     function destroyQuestPanel() {
-      if (questPanelHotkey) {
-        globalShortcut.unregister(questPanelHotkey);
-        questPanelHotkey = null;
+      for (const registered of [questPanelHotkey, questPanelRefreshHotkey]) {
+        if (registered) globalShortcut.unregister(registered);
       }
+      questPanelHotkey = null;
+      questPanelRefreshHotkey = null;
       if (questScanHotkey) {
         globalShortcut.unregister(questScanHotkey);
         questScanHotkey = null;
@@ -1371,7 +1382,30 @@ try {
       return !GetCursorInfo(info) || (info.flags & CURSOR_ON_SCREEN) !== 0;
     };
     const OVERLAY_HOVER_POLL_MS = 100;
+    // Ctrl and the middle button over an item opens its calibre's ammo chart.
+    // Read by polling rather than by hooking the button: GetAsyncKeyState's
+    // low bit says whether it went down since we last asked, so nothing has to
+    // sit in the way of the game's own input to catch it.
+    const VK_MIDDLE_BUTTON = 0x04;
+    const WENT_DOWN_SINCE_LAST_ASKED = 0x0001;
+    const HELD_NOW = 0x8000;
+    let middleWasDown = false;
+    const pollAmmoChartClick = (): void => {
+      const middle = GetAsyncKeyState(VK_MIDDLE_BUTTON);
+      const down = (middle & HELD_NOW) !== 0 || (middle & WENT_DOWN_SINCE_LAST_ASKED) !== 0;
+      const pressed = down && !middleWasDown;
+      middleWasDown = (middle & HELD_NOW) !== 0;
+      if (!pressed || (GetAsyncKeyState(0x11) & HELD_NOW) === 0) return;
+      const item = ocr?.getHoveredItem();
+      if (!item) return;
+      const url = ammoChartUrl(item.name);
+      if (!url) return;
+      log.info(`Opening the ammo chart for ${item.name}: ${url}`);
+      void shell.openExternal(url);
+    };
+
     setInterval(() => {
+      pollAmmoChartClick();
       const overlays = [questPanel, mapWindow].filter(
         (w): w is NonNullable<typeof w> => !!w && !w.isDestroyed() && w.isVisible()
       );

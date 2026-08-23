@@ -4,6 +4,7 @@ import {
   fetchTarkovDevJson,
   TarkovDevTranslationsResponse,
 } from "./tarkovDevApi";
+import { normalizeName } from "./taskText";
 import type TaskScan from "./TaskScan";
 
 // Roubles, dollars, euros - hideout upgrades and a few quests list these as
@@ -836,6 +837,8 @@ export default class TaskData {
     const dailyPerMap = new Map<string, number>();
     for (const daily of scan?.getUnknownTasks() ?? []) {
       if ((daily.percent ?? 0) >= 100 || /comple|done|fail/i.test(daily.status)) continue;
+      // Rotated out while you were away; the game replaced it hours ago
+      if (daily.expiresAt !== undefined && daily.expiresAt < Date.now()) continue;
       const map = maps.find((m) => m.name === daily.location);
       if (map && currentMap && map.id !== currentMap.id) continue;
       if (map && !currentMap) {
@@ -906,6 +909,20 @@ export default class TaskData {
     );
     const objectiveState = (id: string) => progress?.objectiveProgress.get(id);
 
+    // Counters the scan could not pin to a task are keyed by their wording
+    // alone, so they may only be used where that wording belongs to one task.
+    // "Survive and extract from the location" is the wording of a dozen of
+    // them, and lending one task's counter to another ticks off work nobody
+    // has done.
+    const sharedWording = new Set<string>();
+    const seenWording = new Set<string>();
+    for (const task of catalog) {
+      for (const wording of new Set(task.objectives.map((o) => normalizeName(o.text)))) {
+        if (seenWording.has(wording)) sharedWording.add(wording);
+        seenWording.add(wording);
+      }
+    }
+
     const toPanelQuest = (
       task: CatalogTask,
       objectiveFilter: (o: CatalogObjective) => boolean
@@ -932,7 +949,10 @@ export default class TaskData {
               ? giveItems[0]
               : undefined;
           const twinState = twin ? scan?.stateFor(task.id, twin.text) : undefined;
-          const scannedCount = state?.total ? state.count ?? 0 : scan?.countFor(o.text)?.count ?? 0;
+          const looseCount = sharedWording.has(normalizeName(o.text))
+            ? undefined
+            : scan?.countFor(o.text)?.count;
+          const scannedCount = state?.total ? state.count ?? 0 : looseCount ?? 0;
           const twinCount = twinState?.total ? twinState.count ?? 0 : 0;
           const scannedDone = state?.done === true || twinState?.done === true;
           const trackerCount = Math.min(p?.count ?? 0, o.count);
@@ -1009,7 +1029,13 @@ export default class TaskData {
           const believed = grouped
             .filter((step) => step.every((o) => o.done))
             .sort((a, b) => reasonFor(a, evidence) - reasonFor(b, evidence));
-          for (const step of believed.slice(0, Math.max(0, believed.length - barAllows))) {
+          // A percent read off the screen once is no reason to un-complete
+          // what the tracker holds as a fact, however stale the bar is
+          const givable = believed.filter(
+            (step) => reasonFor(step, evidence) < EVIDENCE.tracker
+          ).length;
+          const over = Math.min(givable, Math.max(0, believed.length - barAllows));
+          for (const step of believed.slice(0, over)) {
             for (const objective of step) {
               objective.done = false;
               objective.count = Math.min(objective.count, Math.max(0, objective.total - 1));
@@ -1040,9 +1066,12 @@ export default class TaskData {
       const allDone = allObjectives.every((o) => o.done);
 
       // A single-objective quest's percent is its counter - an estimate, so
-      // it may fill the bar but never complete the objective on its own
+      // it may fill the bar but never complete the objective on its own.
+      // Judged over the whole quest: on a two-objective quest showing one per
+      // map, the bar is the average of both and says nothing about either.
       if (
         percent !== undefined &&
+        grouped.length === 1 &&
         objectives.length === 1 &&
         objectives[0].count === 0 &&
         objectives[0].total > 1
