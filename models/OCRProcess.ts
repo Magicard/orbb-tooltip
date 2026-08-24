@@ -551,7 +551,9 @@ export default class OCRProcess {
                 );
                 this.tooltipWindow.setPosition(tooltipPos.x, tooltipPos.y);
                 setTimeout(() => {
-                  this.tooltipWindow.setBounds({ width: 500, height: 500 });
+                  // The canvas the tooltip draws on. Wide enough for the price
+                  // box and the armour box beside it; anything past it is clipped
+                  this.tooltipWindow.setBounds({ width: 600, height: 500 });
                 }, 10);
               }, 5);
             }

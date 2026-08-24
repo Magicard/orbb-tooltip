@@ -22,6 +22,13 @@
 - **Quests and hideout upgrades that need it**, with counts
 - **Your progress** *(optional)* — link TarkovTracker and requirements you can do **right now show green**, ones locked behind later quests are dimmed "(later)", and ones you've already finished disappear
 
+**Ammo armour ratings.** Hover a round and two more boxes appear beside the price:
+
+- **ARMOR** — classes **I** to **VI** down the side, each graded **S** (usually ignores that armour) down to **F** (pointless). The grade is the community 0–6 rating relabelled, seven ratings to seven letters, and the colour says the same thing again: green S–A, amber B–C, red D–F.
+- **DMG** — damage per shot, written per pellet for buckshot and flechette the way the game writes it (`8×50`), graded the same **S** to **F** way. That grade compares the round with the rest of its own calibre, not with every round in the game — 40 damage is feeble for a rifle and respectable for a PDW. So a round with no penetration at all can still be **S** for damage if nothing else in that calibre hits harder, which is usually the trade you are weighing up.
+
+No lookup, no alt-tab. Both are built into the app, so they cost nothing at hover time and work offline.
+
 **Quest panel.** Press **`'`** and a Questie-style panel slides in from the right: the quests you've accepted with objectives on the map you're on, and the ones you can do anywhere. Objectives still to do are listed white with their counters ("3/5"); a quest whose work is all done but that you haven't handed in yet collapses to a green title with a **DONE** badge, and **READY** appears when the game itself says so.
 
 - **Click** a quest to collapse it, **press and drag** it to reorder the list, **middle-click** it to open its wiki page — your order and which quests are collapsed are remembered between sessions.
@@ -194,6 +201,10 @@ Only what's on screen can be read, so scroll and click through.
 
 ---
 
+### Counters are re-read from the pixels
+
+An objective's "1/5" is drawn over its own progress bar, and the page-level OCR pass reads the bar's edge as part of the glyphs — "1/5" used to come back as "Ml v5". The scanner now takes a second, narrow look: when a row's tail reads as counter-lookalike garble, the helper crops exactly those pixels, scales them up smoothly, and reads them again with the OCR locked to digits and a slash. A reading only counts if it verifies as a real counter (a count never exceeds its non-zero total, both here and again on the panel side), anything else abstains rather than guesses, and nothing reaches TarkovTracker — completions or counts — until two separate reads agree.
+
 ## Building from source
 
 Requires Node.js 18+ on Windows.
@@ -206,6 +217,28 @@ npm run make       # build the release zip and installer into out/make/
 ```
 
 Press F6 in-app afterwards to calibrate (repackaging resets the calibration file).
+
+### Keeping the ammo table current
+
+Ammo stats only move when the game patches, so the table is generated into the repo rather than fetched at runtime:
+
+```
+npm run generate:ammo
+```
+
+That reads the [wiki's Ballistics page](https://escapefromtarkov.fandom.com/wiki/Ballistics) and the live item catalogue, pins each round to its item id and rewrites `models/ammoEffectiveness.generated.ts`. It prints any round it could not pin and refuses to write a suspiciously short table. A handful of rounds never match because no such item exists to hover — the two Arena-only rounds and the two 12.7x108mm belts.
+
+**You should not need to remember to run it.** [`.github/workflows/ammo-data.yml`](.github/workflows/ammo-data.yml) runs it every Monday and opens a pull request only when the numbers actually moved — a wiki edit that touches no ammo data is skipped. One-time setup: tick **"Allow GitHub Actions to create and approve pull requests"** under Settings → Actions → General, or GitHub blocks the PR step no matter what the workflow declares. The generated file is stamped with the wiki revision it came from rather than the date it was scraped, so an unchanged wiki regenerates byte-for-byte identically and the job stays silent; the header tells you how old the source is:
+
+```
+// Wiki revision 343633, last edited 2026-05-08
+```
+
+Each entry carries its round's name in a trailing comment, so the pull request diff reads like `M995 damage 42 -> 45`. Skim it, merge, and the numbers ship with the next release.
+
+It also reports the other direction — ammo you can hold that the chart says nothing about. Grenades and flares have no armour rating by their nature, but a **gun round** listed there means the wiki has not covered that calibre yet and the tooltip will show no armour or damage box for it. At the time of writing that is 5.8x42mm (all four rounds, the calibre is absent from the wiki entirely) and `.50 AE FMJ Bull`.
+
+The one thing no amount of automation fixes is the wiki lagging the game — it is edited in bursts after a patch, not the instant one lands. If you spot a stat in the game's own inspect panel that disagrees with the tooltip, the wiki is behind and the fix belongs upstream.
 
 ### Rebuilding the OCR scanner (optional)
 

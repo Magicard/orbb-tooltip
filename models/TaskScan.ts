@@ -112,6 +112,10 @@ export type ScannedObjectiveState = {
   // Counter shown on the row ("3/5"), when it has one
   count?: number;
   total?: number;
+  // Reads that saw the stored count, for the same reason as doneSeen: the
+  // tracker only moves a counter forward, so a misread must not reach it
+  // on a single sighting
+  countSeen?: number;
   at: number;
 };
 
@@ -131,6 +135,10 @@ type Word = {
   ticks: number;
   // Percentage of this word's row band painted the "objective done" blue
   doneBand: number;
+  // The helper's digits-only re-read of this word's cell tail, present when
+  // the sparse pass produced counter-lookalike garble there ("Ml v5") and a
+  // second constrained look at those exact pixels read a clean "1/5"
+  constrained?: string;
 };
 
 // Enough tick-coloured pixels to be the glyph rather than noise
@@ -521,11 +529,57 @@ export default class TaskScan {
       // How many words of the row the counter took up, so exactly those come
       // off the text rather than a regex guessing at where it started
       let counterWords = 0;
-      for (const tail of [1, 2, 3]) {
-        counter = countIn(texts.slice(-tail).join("").replace(/\s+/g, ""));
-        if (counter) {
-          counterWords = tail;
+
+      // The helper re-read a garbled tail from the pixels with a digits-only
+      // pass; that beats any repair of the sparse pass's garble. The counter
+      // cell is not always the row's literal last word - a stray tick glyph
+      // can follow it - so the marked word is looked for among the last few.
+      let constrainedAt = -1;
+      for (let back = 0; back < 3 && back < row.length; back++) {
+        if (row[row.length - 1 - back].constrained) {
+          constrainedAt = row.length - 1 - back;
           break;
+        }
+      }
+      let tailUnreadable = false;
+      if (constrainedAt >= 0) {
+        const reading = row[constrainedAt].constrained;
+        // Through the same validation every counter passes: the count/total
+        // shape, a non-zero total, and a count that does not exceed it
+        counter = countIn(reading);
+        // The helper looked at the actual pixels with digits-only OCR; if
+        // even that produced nonsense, a text-level lookalike repair of the
+        // same garble cannot be trusted to do better - it is how "items v/s"
+        // becomes a fabricated 5/5. No counter beats a guessed one.
+        if (!counter) tailUnreadable = true;
+        if (counter) {
+          let first = constrainedAt;
+          while (first > 0 && row[first - 1].constrained === reading) first--;
+          // The progress bar itself often reads as one more garble word just
+          // ahead of the counter ("Ml" before "v5"); the lookalike repair
+          // used to swallow it with the counter, so this path must too. Only
+          // letter-bearing debris and at most two words - a real trailing
+          // number in the wording is never eaten
+          let debris = 0;
+          while (
+            debris < 2 &&
+            first > 3 &&
+            /^[0-9lIOoSsMmWw|!\\/vVyY]{1,3}$/.test(texts[first - 1]) &&
+            !/^\d+$/.test(texts[first - 1])
+          ) {
+            first--;
+            debris++;
+          }
+          counterWords = row.length - first;
+        }
+      }
+      if (!counter && !tailUnreadable) {
+        for (const tail of [1, 2, 3]) {
+          counter = countIn(texts.slice(-tail).join("").replace(/\s+/g, ""));
+          if (counter) {
+            counterWords = tail;
+            break;
+          }
         }
       }
       if (counter && row.length > 3) {
@@ -1007,11 +1061,20 @@ export default class TaskScan {
           ? Math.max(row.count, previous.count)
           : row.count ?? previous?.count;
       const total = row.total ?? previous?.total;
+      // A fresh sighting of the stored value corroborates it; a new value
+      // starts corroboration over
+      const countSeen =
+        row.count !== undefined && row.count === count
+          ? previous?.count === count
+            ? (previous.countSeen ?? 0) + 1
+            : 1
+          : previous?.countSeen ?? 0;
       if (
         previous &&
         previous.done === done &&
         previous.doneSeen === doneSeen &&
         previous.count === count &&
+        previous.countSeen === countSeen &&
         previous.total === total
       ) {
         continue;
@@ -1024,6 +1087,7 @@ export default class TaskScan {
         done,
         doneSeen,
         count,
+        countSeen,
         total,
         at: now,
       });
@@ -1170,7 +1234,11 @@ export default class TaskScan {
         this.objectives.set(o.key, o);
       }
       for (const o of data.objectiveStates ?? []) {
-        this.objectiveStates.set(o.key, { ...o, doneSeen: o.doneSeen ?? (o.done ? 1 : 0) });
+        this.objectiveStates.set(o.key, {
+          ...o,
+          doneSeen: o.doneSeen ?? (o.done ? 1 : 0),
+          countSeen: o.countSeen ?? (o.count !== undefined ? 1 : 0),
+        });
       }
       for (const [k, v] of Object.entries(data.toasts ?? {})) this.toasts.set(k, v as ToastState);
       for (const [k, until] of Object.entries(data.dismissed ?? {})) {
@@ -1223,6 +1291,7 @@ function parseTsv(tsv: string): Word[] {
       text,
       ticks: Number(cols[12] ?? 0) || 0,
       doneBand: Number(cols[13] ?? 0) || 0,
+      constrained: cols[14]?.trim() || undefined,
     });
   }
   return words;

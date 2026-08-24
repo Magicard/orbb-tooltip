@@ -3,6 +3,12 @@ import { TOOLTIP_ITEM } from "../state/tooltipItem";
 import { useHookstate } from "@hookstate/core";
 import { fleaPrice, numberWithCommas } from "../../utils";
 import { ItemTask } from "../../models/Item";
+import {
+  ARMOR_CLASSES,
+  ammoStatsFor,
+  gradeStyle,
+  tierLabel,
+} from "../../models/ammoEffectiveness";
 
 // Quest/hideout requirements arrive on the item itself (Item.tasks),
 // built in the main process from live json.tarkov.dev data and, when a
@@ -58,6 +64,10 @@ export function Tooltip() {
     return (item?.tasks ?? []).filter((task) => task.status !== "done");
   }, [item]);
 
+  // Null for anything that is not ammo we hold a chart for; a bare map
+  // lookup, cheaper than memoising it
+  const ammo = item ? ammoStatsFor(item) : null;
+
   if (item) {
     const fleaPriceToUse = fleaPrice(item);
     const traderPrice = item?.prices?.trader?.price > 0 ? item.prices.trader.price : 0;
@@ -69,65 +79,139 @@ export function Tooltip() {
     const visibleTasks = itemTasks.slice(0, MAX_TASK_ROWS);
     const hiddenTaskCount = itemTasks.length - visibleTasks.length;
 
+    // The measured element is the row, so the reported size covers both boxes
     return (
-      <div ref={rootRef} className="block items-center p-1.5 bg-stone-900/95 border border-stone-700 rounded h-fit w-fit text-sm text-stone-300 font-['Bender'] font-black tracking-wide overflow-y-hidden">
-        {/* ITEM NAME */}
-        <div className="w-fit whitespace-nowrap text-[15px] text-white">
-          {item.shortName}
-        </div>
-
-        {/* FLEA MARKET: what the whole item is worth, then per slot */}
-        <div className="whitespace-nowrap">
-          {item.availableOnFleaMarket ? (
-            <>
-              <span className="tracking-wider">
-                <span className="font-['Nunito']">₽</span>
-                {numberWithCommas(fleaPriceToUse)}
-              </span>
-              {perSlot && (
-                <span className="ml-1.5 text-[12px] text-stone-500 tracking-wider">
-                  <span className="font-['Nunito']">₽</span>
-                  {numberWithCommas(fleaPricePerSlot)}/slot
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="text-stone-400">Unavailable on Flea</span>
-          )}
-        </div>
-
-        {/* TRADER PRICE */}
-        <div className="whitespace-nowrap">
-          <span className="tracking-wider">
-            <span className="font-['Nunito']">₽</span>
-            {numberWithCommas(traderPrice)}
-          </span>
-          <span className="capitalize">
-            <span className="mr-1"></span>(
-            {item.prices?.trader?.name ?? "N/A"})
-          </span>
-          {perSlot && traderPrice > 0 && (
-            <span className="ml-1.5 text-[12px] text-stone-500 tracking-wider">
-              <span className="font-['Nunito']">₽</span>
-              {numberWithCommas(traderPricePerSlot)}/slot
-            </span>
-          )}
-        </div>
-
-        {/* TASKS & HIDEOUT */}
-        {visibleTasks.map((task, index) => (
-          <TooltipTask key={index} task={task} />
-        ))}
-        {hiddenTaskCount > 0 && (
-          <div className="whitespace-nowrap text-stone-500">
-            +{hiddenTaskCount} more
+      <div ref={rootRef} className="flex items-start gap-1 w-fit h-fit">
+        <div className="block items-center p-1.5 bg-stone-900/95 border border-stone-700 rounded h-fit w-fit text-sm text-stone-300 font-['Bender'] font-black tracking-wide overflow-y-hidden">
+          {/* ITEM NAME */}
+          <div className="w-fit whitespace-nowrap text-[15px] text-white">
+            {item.shortName}
           </div>
+
+          {/* FLEA MARKET: what the whole item is worth, then per slot */}
+          <div className="whitespace-nowrap">
+            {item.availableOnFleaMarket ? (
+              <>
+                <span className="tracking-wider">
+                  <span className="font-['Nunito']">₽</span>
+                  {numberWithCommas(fleaPriceToUse)}
+                </span>
+                {perSlot && (
+                  <span className="ml-1.5 text-[12px] text-stone-500 tracking-wider">
+                    <span className="font-['Nunito']">₽</span>
+                    {numberWithCommas(fleaPricePerSlot)}/slot
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-stone-400">Unavailable on Flea</span>
+            )}
+          </div>
+
+          {/* TRADER PRICE */}
+          <div className="whitespace-nowrap">
+            <span className="tracking-wider">
+              <span className="font-['Nunito']">₽</span>
+              {numberWithCommas(traderPrice)}
+            </span>
+            <span className="capitalize">
+              <span className="mr-1"></span>(
+              {item.prices?.trader?.name ?? "N/A"})
+            </span>
+            {perSlot && traderPrice > 0 && (
+              <span className="ml-1.5 text-[12px] text-stone-500 tracking-wider">
+                <span className="font-['Nunito']">₽</span>
+                {numberWithCommas(traderPricePerSlot)}/slot
+              </span>
+            )}
+          </div>
+
+          {/* TASKS & HIDEOUT */}
+          {visibleTasks.map((task, index) => (
+            <TooltipTask key={index} task={task} />
+          ))}
+          {hiddenTaskCount > 0 && (
+            <div className="whitespace-nowrap text-stone-500">
+              +{hiddenTaskCount} more
+            </div>
+          )}
+        </div>
+        {ammo && <AmmoArmor ratings={ammo.classes} />}
+        {ammo && (
+          <AmmoDamage
+            damage={ammo.damage}
+            projectiles={ammo.projectiles}
+            tier={ammo.damageTier}
+          />
         )}
       </div>
     );
   }
 
   return <div></div>;
+}
+
+// How the round does against each armour class, 1 at the top through 6, in
+// the same colours the chart these numbers come from uses
+function AmmoArmor({ ratings }: { ratings: readonly number[] }) {
+  return (
+    <div className="p-1.5 bg-stone-900/95 border border-stone-700 rounded h-fit w-fit text-sm text-stone-300 font-['Bender'] font-black tracking-wide">
+      <div className="whitespace-nowrap text-[11px] text-stone-500 leading-tight">
+        ARMOR
+      </div>
+      {ARMOR_CLASSES.map((armorClass, index) => {
+        const { bg, fg } = gradeStyle(ratings[index]);
+        return (
+          <div key={armorClass} className="flex items-center gap-1 mt-0.5">
+            <span className="w-5 text-right text-[12px] text-stone-400">
+              {armorClass}
+            </span>
+            <span
+              className="w-4 text-center text-[12px] rounded-sm leading-tight"
+              style={{ backgroundColor: bg, color: fg }}
+            >
+              {tierLabel(ratings[index])}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Buckshot and flechette are quoted the way the game quotes them, per pellet.
+// The tier grades the whole shot against the rest of its calibre, so the
+// hardest-hitting round a gun can fire reads S even if nothing it hits is
+// wearing armour.
+function AmmoDamage({
+  damage,
+  projectiles,
+  tier,
+}: {
+  damage: number;
+  projectiles: number;
+  tier: number;
+}) {
+  const { bg, fg } = gradeStyle(tier);
+
+  return (
+    <div className="p-1.5 bg-stone-900/95 border border-stone-700 rounded h-fit w-fit text-sm text-stone-300 font-['Bender'] font-black tracking-wide">
+      <div className="whitespace-nowrap text-[11px] text-stone-500 leading-tight">
+        DMG
+      </div>
+      <div className="flex items-center gap-1 mt-0.5">
+        <span className="whitespace-nowrap text-[15px] text-white leading-tight">
+          {projectiles > 1 ? `${projectiles}×${damage}` : damage}
+        </span>
+        <span
+          className="w-4 text-center text-[12px] rounded-sm leading-tight"
+          style={{ backgroundColor: bg, color: fg }}
+        >
+          {tierLabel(tier)}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function TooltipTask({ task }: { task: ItemTask }) {

@@ -44,9 +44,66 @@ type TarkovDevTradersResponse = {
   data: Record<string, { id: string; name: string }>;
 };
 
+// Ammo names are the hardest thing on the screen to read: they are dense with
+// dots and slashes, which OCR drops outright ("20/70 7.3mm buckshot" comes
+// back as "2070 73mm buckshot"), and they end in codes whose letters look
+// exactly like digits, so M856A1 reads as MBS6AL. Folding both the catalogue
+// and what was read into one alphabet lets the two meet in the middle.
+//
+// Checked against the whole catalogue: no two differently named items fold
+// together, and any key that ever did would be dropped as ambiguous below.
+const OCR_CONFUSABLES: Record<string, string> = {
+  o: "0",
+  b: "8",
+  s: "5",
+  i: "1",
+  l: "1",
+  j: "1",
+  z: "2",
+};
+
+function foldForOcr(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[a-z]/g, (letter) => OCR_CONFUSABLES[letter] ?? letter)
+    .replace(/[^a-z0-9]/g, "");
+}
+
+// Whether two folded names differ by at most one substitution, insertion or
+// deletion. Cheap single pass; the strings are already the same alphabet.
+function withinOneEdit(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (long.length - short.length > 1) return false;
+
+  let i = 0;
+  let j = 0;
+  let edited = false;
+  while (i < short.length && j < long.length) {
+    if (short[i] === long[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    if (edited) return false;
+    edited = true;
+    // Same length: a substitution consumes one char of each. Different
+    // length: the long side carries the extra char, skip it alone.
+    if (short.length === long.length) i += 1;
+    j += 1;
+  }
+  return true;
+}
+
 export default class Items {
   items: Item[];
   searchIndex: MiniSearch;
+  // Folded item name -> item id, for reading through OCR damage. Ids, not
+  // objects: items are replaced wholesale on every refetch and a held
+  // reference would keep serving the old prices and quest states.
+  private foldedNames = new Map<string, { id: string; name: string }>();
+  // Repairs already logged, so hovering the same misread does not spam
+  private loggedRepairs = new Map<string, number>();
   taskData: TaskData = new TaskData();
   // Accepted / handed-in quests from the game's logs, when available
   private questEvents: QuestEventMap | null = null;
@@ -341,9 +398,37 @@ export default class Items {
     });
 
     this.searchIndex.addAll(this.items);
+
+    // A name that two different items share cannot identify either of them
+    this.foldedNames.clear();
+    const ambiguous = new Set<string>();
+    for (const item of this.items) {
+      const key = foldForOcr(item.name);
+      if (key === "") continue;
+      const seen = this.foldedNames.get(key);
+      if (seen === undefined) {
+        this.foldedNames.set(key, { id: item.id, name: item.name });
+      } else if (seen.name !== item.name) {
+        ambiguous.add(key);
+      }
+    }
+    for (const key of ambiguous) this.foldedNames.delete(key);
   }
 
   search(searchQuery: string, lowestAcceptableScore = 0): Item {
+    // An exact match once both sides are folded says more than any fuzzy
+    // score can, so it is tried before the index and is not score-gated
+    const foldedQuery = foldForOcr(searchQuery);
+    const foldedRef =
+      this.foldedNames.get(foldedQuery) ?? this.nearestName(foldedQuery);
+    if (foldedRef) {
+      const folded = this.getItemById(foldedRef.id);
+      if (folded) {
+        this.logRepair(searchQuery, folded.name);
+        return folded;
+      }
+    }
+
     const searchResults = this.searchIndex.search(searchQuery);
 
     if (!searchResults || searchResults.length === 0) {
@@ -364,6 +449,40 @@ export default class Items {
     }
 
     return item;
+  }
+
+  // The same read recurs on every hover of the same item; once per few
+  // minutes is enough to see the folding work
+  private logRepair(query: string, resolved: string): void {
+    if (query.trim().toLowerCase() === resolved.trim().toLowerCase()) return;
+    const now = Date.now();
+    if (now - (this.loggedRepairs.get(query) ?? 0) < 5 * 60 * 1000) return;
+    this.loggedRepairs.set(query, now);
+    if (this.loggedRepairs.size > 200) {
+      const oldest = this.loggedRepairs.keys().next().value;
+      if (oldest !== undefined) this.loggedRepairs.delete(oldest);
+    }
+    log.info(`OCR read "${query}" as "${resolved}"`);
+  }
+
+  // Folding reconciles a letter read for a digit, but not a digit read for
+  // a different digit ("5.7x28mm" coming back as "5.2x28mm"). One wrong
+  // character against a name this long is still identifying - but only when
+  // exactly one item is that close. Two candidates means the read did not
+  // say which, and no answer beats a guessed one.
+  private nearestName(
+    foldedQuery: string
+  ): { id: string; name: string } | null {
+    if (foldedQuery.length < 8) return null;
+
+    let winner: { id: string; name: string } | null = null;
+    for (const [candidate, ref] of this.foldedNames) {
+      if (Math.abs(candidate.length - foldedQuery.length) > 1) continue;
+      if (!withinOneEdit(candidate, foldedQuery)) continue;
+      if (winner !== null && winner.name !== ref.name) return null;
+      winner = ref;
+    }
+    return winner;
   }
 
   getItemById(id: string): Item {

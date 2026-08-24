@@ -553,6 +553,216 @@ static std::string annotateTicks(const std::string& tsv, PIX* pix) {
 	return out;
 }
 
+// ---- constrained counter re-read -------------------------------------------
+// An objective's "1/5" counter is drawn on top of its progress bar, and the
+// sparse page pass reads the bar's edge as part of the glyphs - "1/5" comes
+// back as "Ml v5". The garbled words still carry correct boxes, so the fix
+// is a second, narrow look: crop exactly that region, keep only its bright
+// pixels (the digits are white, the bar is not - the same trick the toast
+// pipeline uses), scale it up, and let Tesseract read it knowing only digits
+// and a slash exist. The reading is appended as a 15th column to every word
+// of the garbled tail, so the consumer can both use it and know how many
+// words it replaces. Only readings that verify as "<n>/<n>" are kept.
+
+static const int COUNTER_RESCAN_LIMIT = 12;
+static const float COUNTER_RESCAN_SCALE = 3.0f;
+
+// Characters the page pass produces when it misreads a counter
+static bool counterSuspect(const std::string& joined) {
+	if (joined.size() < 2 || joined.size() > 9) return false;
+	bool digitish = false, slashish = false;
+	for (char c : joined) {
+		if (!strchr("0123456789lIiOoSsMmWw|!/vVyY", c)) return false;
+		if (strchr("0123456789lIOoSs", c)) digitish = true;
+		if (strchr("/vVyY|!", c)) slashish = true;
+	}
+	return digitish && slashish;
+}
+
+static bool cleanCounter(const std::string& t) {
+	size_t slash = t.find('/');
+	if (slash == std::string::npos || slash == 0 || slash + 1 >= t.size() || t.size() > 9) return false;
+	for (size_t i = 0; i < t.size(); i++) {
+		if (i == slash) continue;
+		if (!isdigit((unsigned char)t[i])) return false;
+	}
+	// The shape alone is not enough: a phantom digit turns 1/5 into a
+	// plausible 11/5. A counter never exceeds its total.
+	const int count = atoi(t.substr(0, slash).c_str());
+	const int total = atoi(t.substr(slash + 1).c_str());
+	return total > 0 && count <= total;
+}
+
+static std::string constrainCounters(tesseract::TessBaseAPI& tess, const std::string& tsv, PIX* pix) {
+	if (!pix || pixGetDepth(pix) != 32) return tsv;
+
+	struct Row { std::string raw; bool word = false; int x = 0, y = 0, w = 0, h = 0; std::string text; };
+	std::vector<Row> rows;
+	size_t start = 0;
+	while (start < tsv.size()) {
+		size_t end = tsv.find('\n', start);
+		const bool last = end == std::string::npos;
+		if (last) end = tsv.size();
+		Row row;
+		row.raw = tsv.substr(start, end - start);
+		if (!row.raw.empty() && row.raw.back() == '\r') row.raw.pop_back();
+		if (row.raw.rfind("5\t", 0) == 0) {
+			std::vector<std::string> cols;
+			size_t pos = 0;
+			while (pos <= row.raw.size()) {
+				size_t tab = row.raw.find('\t', pos);
+				if (tab == std::string::npos) { cols.push_back(row.raw.substr(pos)); break; }
+				cols.push_back(row.raw.substr(pos, tab - pos));
+				pos = tab + 1;
+			}
+			if (cols.size() >= 12) {
+				row.word = true;
+				row.x = atoi(cols[6].c_str()); row.y = atoi(cols[7].c_str());
+				row.w = atoi(cols[8].c_str()); row.h = atoi(cols[9].c_str());
+				row.text = cols[11];
+			}
+		}
+		rows.push_back(std::move(row));
+		if (last) break;
+		start = end + 1;
+	}
+
+	// Visual lines, not Tesseract lines: the sparse page mode gives every
+	// text blob its own block, so a counter shattered into "Ml" and "v5"
+	// never shares block/para/line numbers. Words share a line when their
+	// vertical centres sit within about a glyph height; a horizontal gap
+	// wider than a few characters starts a new cell, and a counter is the
+	// last thing in its cell.
+	std::vector<size_t> wordIdx;
+	for (size_t r = 0; r < rows.size(); r++) {
+		if (rows[r].word && !rows[r].text.empty()) wordIdx.push_back(r);
+	}
+	std::sort(wordIdx.begin(), wordIdx.end(), [&](size_t a, size_t b) {
+		const int ca = rows[a].y * 2 + rows[a].h, cb = rows[b].y * 2 + rows[b].h;
+		if (ca != cb) return ca < cb;
+		return rows[a].x < rows[b].x;
+	});
+	std::vector<std::vector<size_t>> lines;
+	for (size_t idx : wordIdx) {
+		bool placed = false;
+		if (!lines.empty()) {
+			const size_t anchor = lines.back().front();
+			const int reach = (std::max)(12, (int)(1.2 * (std::max)(rows[idx].h, rows[anchor].h)));
+			if (abs((rows[idx].y * 2 + rows[idx].h) - (rows[anchor].y * 2 + rows[anchor].h)) <= reach) {
+				lines.back().push_back(idx);
+				placed = true;
+			}
+		}
+		if (!placed) lines.push_back({ idx });
+	}
+
+	const l_int32 pw = pixGetWidth(pix), ph = pixGetHeight(pix);
+	bool configured = false;
+	int rescans = 0;
+	static const int CELL_GAP_PX = 60;
+
+	for (auto& line : lines) {
+		if (rescans >= COUNTER_RESCAN_LIMIT) break;
+		std::sort(line.begin(), line.end(), [&](size_t a, size_t b) { return rows[a].x < rows[b].x; });
+
+		// Cells are runs of words with no wide gap between them; only a
+		// cell's tail can be a counter
+		size_t cellStart = 0;
+		for (size_t wpos = 1; wpos <= line.size(); wpos++) {
+			const bool cellEnd = wpos == line.size() ||
+				rows[line[wpos]].x - (rows[line[wpos - 1]].x + rows[line[wpos - 1]].w) > CELL_GAP_PX;
+			if (!cellEnd) continue;
+			const size_t lastw = wpos - 1;
+			const size_t cellLen = lastw - cellStart + 1;
+			cellStart = wpos;
+			if (rescans >= COUNTER_RESCAN_LIMIT) break;
+
+			// Longest suspect tail of the cell, up to three words
+			for (size_t k = (std::min)((size_t)3, cellLen); k >= 1; k--) {
+				std::string joined;
+				for (size_t t = lastw - k + 1; t <= lastw; t++) joined += rows[line[t]].text;
+				// A tail that already reads clean is this cell's counter; a
+				// rescan of part of it could only replace right with wrong
+				if (cleanCounter(joined)) break;
+				if (!counterSuspect(joined)) continue;
+
+				int x0 = INT_MAX, y0 = INT_MAX, x1 = 0, y1 = 0;
+				for (size_t t = lastw - k + 1; t <= lastw; t++) {
+					const Row& rw = rows[line[t]];
+					x0 = (std::min)(x0, rw.x); y0 = (std::min)(y0, rw.y);
+					x1 = (std::max)(x1, rw.x + rw.w); y1 = (std::max)(y1, rw.y + rw.h);
+				}
+				// Task-screen counters are ~15px tall at 1080p; the only other
+				// place this shape appears is inventory stack counts in 10px
+				// micro-text, which are none of our business and misread easily
+				if (y1 - y0 < 12) break;
+				// A counter is a few glyphs; anything much bigger is misread UI
+				if (x1 - x0 > 240 || y1 - y0 > 40) break;
+				x0 = (std::max)(0, x0 - 4); y0 = (std::max)(0, y0 - 3);
+				x1 = (std::min)((int)pw, x1 + 4); y1 = (std::min)((int)ph, y1 + 3);
+				if (x1 - x0 < 6 || y1 - y0 < 6) break;
+
+				if (!configured) {
+					tess.SetPageSegMode(tesseract::PSM_SINGLE_LINE);
+					tess.SetVariable("tessedit_char_whitelist", "0123456789/");
+					tess.SetVariable("classify_bln_numeric_mode", "1");
+					tess.SetVariable("preserve_interword_spaces", "0");
+					configured = true;
+				}
+
+				// Grayscale, scaled up smoothly, and nothing else: the glyphs are
+				// mid-grey antialiased 15px digits, and hard-thresholding them
+				// before scaling turns them into jagged blobs that sprout
+				// phantom strokes. Tesseract reads the clean grayscale directly.
+				BOX* box = boxCreate(x0, y0, x1 - x0, y1 - y0);
+				PIX* crop = pixClipRectangle(pix, box, NULL);
+				boxDestroy(&box);
+				if (!crop) break;
+				PIX* gray = pixConvertRGBToGray(crop, 0.3f, 0.59f, 0.11f);
+				std::string reading;
+				if (gray) {
+					PIX* big = pixScale(gray, COUNTER_RESCAN_SCALE, COUNTER_RESCAN_SCALE);
+					if (big) {
+						tess.SetImage(big);
+						tesseract::ETEXT_DESC monitor;
+						monitor.set_deadline_msecs(400);
+						tess.Recognize(&monitor);
+						char* out = tess.GetUTF8Text();
+						if (out) {
+							for (const char* c = out; *c; c++) {
+								if (!isspace((unsigned char)*c)) reading += *c;
+							}
+							delete[] out;
+						}
+						pixDestroy(&big);
+					}
+					pixDestroy(&gray);
+				}
+				pixDestroy(&crop);
+				rescans++;
+
+				if (cleanCounter(reading)) {
+					for (size_t t = lastw - k + 1; t <= lastw; t++) rows[line[t]].raw += "\t" + reading;
+				}
+				break;
+			}
+		}
+	}
+
+	if (configured) {
+		// Back to the fast tooltip configuration
+		tess.SetPageSegMode(tesseract::PSM_SINGLE_BLOCK);
+		tess.SetVariable("tessedit_char_whitelist", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,$€₽@- ");
+		tess.SetVariable("classify_bln_numeric_mode", "1");
+		tess.SetVariable("preserve_interword_spaces", "0");
+	}
+
+	std::string out;
+	out.reserve(tsv.size() + 256);
+	for (const Row& row : rows) { out += row.raw; out += '\n'; }
+	return out;
+}
+
 // OCR of the notification strip: bright pixels only, as black text on a white
 // page, and no OCR at all when there is nothing bright
 static std::string ocrToast(tesseract::TessBaseAPI& tess, PIX* pix, const std::string& dumpPath) {
@@ -673,7 +883,7 @@ static std::string scanScreenRegion(tesseract::TessBaseAPI& tess, int x, int y, 
 	}
 
 	if (fullScreen) {
-		result = annotateTicks(ocrPage(tess, pix, 1.0f, PAGE_OCR_DEADLINE_MS), pix);
+		result = constrainCounters(tess, annotateTicks(ocrPage(tess, pix, 1.0f, PAGE_OCR_DEADLINE_MS), pix), pix);
 	}
 	else {
 		result = ocrToast(tess, pix, dumpPath);
@@ -689,7 +899,7 @@ static std::string scanImageFile(tesseract::TessBaseAPI& tess, const std::string
 	if (!pix) return std::string();
 	std::string result = asToast
 		? ocrToast(tess, pix, path + ".debug.png")
-		: annotateTicks(ocrPage(tess, pix, scale, PAGE_OCR_DEADLINE_MS), pix);
+		: constrainCounters(tess, annotateTicks(ocrPage(tess, pix, scale, PAGE_OCR_DEADLINE_MS), pix), pix);
 	pixDestroy(&pix);
 	return result;
 }

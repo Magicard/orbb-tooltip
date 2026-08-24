@@ -746,10 +746,10 @@ try {
           maps.map((m) => m.name),
           activeIds
         );
-        // Hand what this pass read to TarkovTracker: counters as soon as
-        // they climb (a wrong one is corrected by the next read), but a
-        // completion only once two separate reads have seen the tick -
-        // TrackerSync never un-completes, so that write is permanent.
+        // Hand what this pass read to TarkovTracker, but nothing on a
+        // single sighting: the tracker only moves forward, so a completion
+        // needs two reads of the tick and a counter two reads of the same
+        // value before either is written.
         const sync = getTrackerSync();
         for (const state of canPushToTracker() ? taskScan.statesSince(passStartedAt) : []) {
           if (!state.objectiveId) continue;
@@ -758,7 +758,9 @@ try {
           sync.queueObjective(state.objectiveId, {
             state: corroborated && !known?.complete ? "completed" : undefined,
             count:
-              typeof state.count === "number" && state.count > (known?.count ?? 0)
+              typeof state.count === "number" &&
+              (state.countSeen ?? 0) >= OCR_WRITE_CONFIRMATIONS &&
+              state.count > (known?.count ?? 0)
                 ? state.count
                 : undefined,
           });
