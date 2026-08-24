@@ -275,6 +275,8 @@ static void getTopLeftBorderPoint(short startingX, short startingY, short& red, 
 	offsetY -= checkRange;
 }
 
+static PIX* pixFromImage(Image& img);
+
 static std::string scanForText(tesseract::TessBaseAPI& tess, int x1, int y1, int width, int height) {
 	std::string result;
 
@@ -285,14 +287,29 @@ static std::string scanForText(tesseract::TessBaseAPI& tess, int x1, int y1, int
 	// Capture the image
 	Image img(cachedDesktopDC, x1, y1, width, height);
 
-	tess.SetImage(img.GetPixels(), img.GetWidth(), img.GetHeight(),
-		img.GetBytesPerPixel(), img.GetBytesPerScanLine());
+	// The tooltip's ~15px glyphs sit at the ragged edge of what the
+	// OCR reads at native size - SS190 came back SSIS, PS gs as BS gs.
+	// Scaled up smoothly they read clean, the same lesson the counter
+	// re-read taught; the rect is small, so this costs milliseconds.
+	PIX* pix = pixFromImage(img);
+	PIX* gray = pix ? pixConvertRGBToGray(pix, 0.3f, 0.59f, 0.11f) : nullptr;
+	PIX* big = gray ? pixScale(gray, 2.0f, 2.0f) : nullptr;
+	if (big) {
+		tess.SetImage(big);
+	}
+	else {
+		tess.SetImage(img.GetPixels(), img.GetWidth(), img.GetHeight(),
+			img.GetBytesPerPixel(), img.GetBytesPerScanLine());
+	}
 
 	char* utf8 = tess.GetUTF8Text();
 	if (utf8) {
 		result.assign(utf8);
 		delete[] utf8;
 	}
+	if (big) pixDestroy(&big);
+	if (gray) pixDestroy(&gray);
+	if (pix) pixDestroy(&pix);
 
 	return result;
 }

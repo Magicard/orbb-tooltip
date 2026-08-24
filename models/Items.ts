@@ -32,6 +32,7 @@ type TarkovDevItem = {
   iconLink: string;
   types: string[];
   sellToTrader: TarkovDevTraderOffer[];
+  minLevelForFlea: number | null;
 };
 
 type TarkovDevItemsResponse = {
@@ -69,6 +70,29 @@ function foldForOcr(text: string): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
+// The digits 9 and 3 also read for each other ("M993" comes back "M333"),
+// but both are real digits, so merging them in the main fold would blur
+// genuinely different names - the room 303 and room 309 keys collide. They
+// get their own second-chance map instead, where such pairs are dropped as
+// ambiguous and everything else resolves exactly.
+function foldDigits(text: string): string {
+  return foldForOcr(text).replace(/9/g, "3");
+}
+
+// A trader's tooltip carries the price on a second line, and OCR appends it
+// to the name: "9x19mm RIP" reads as "9x19mm RIP P2e88" and misses every
+// match. The price renders as a rouble sign plus digits, which OCR turns
+// into a token starting with P - strip trailing digit-ish tokens, then one
+// such P-token, and what is left is the name.
+function stripPriceTail(query: string): string {
+  const tokens = query.trim().split(/\s+/);
+  let end = tokens.length;
+  while (end > 1 && /^[0-9oOeEsSiIl]{1,4}$/.test(tokens[end - 1])) end--;
+  if (end > 1 && /^[P\u20BD][0-9a-zA-Z]{1,6}$/.test(tokens[end - 1])) end--;
+  else return query;
+  return tokens.slice(0, end).join(" ");
+}
+
 // Whether two folded names differ by at most one substitution, insertion or
 // deletion. Cheap single pass; the strings are already the same alphabet.
 function withinOneEdit(a: string, b: string): boolean {
@@ -102,6 +126,8 @@ export default class Items {
   // objects: items are replaced wholesale on every refetch and a held
   // reference would keep serving the old prices and quest states.
   private foldedNames = new Map<string, { id: string; name: string }>();
+  // The same again with 9 and 3 merged, exact matches only
+  private foldedDigits = new Map<string, { id: string; name: string }>();
   // Repairs already logged, so hovering the same misread does not spam
   private loggedRepairs = new Map<string, number>();
   taskData: TaskData = new TaskData();
@@ -265,6 +291,10 @@ export default class Items {
           slots: item.width * item.height,
           tasks: [] as ItemTask[],
           icon: item.iconLink,
+          fleaUnlockLevel:
+            typeof item.minLevelForFlea === "number" && item.minLevelForFlea > 0
+              ? item.minLevelForFlea
+              : undefined,
         };
       }
     );
@@ -401,7 +431,9 @@ export default class Items {
 
     // A name that two different items share cannot identify either of them
     this.foldedNames.clear();
+    this.foldedDigits.clear();
     const ambiguous = new Set<string>();
+    const ambiguousDigits = new Set<string>();
     for (const item of this.items) {
       const key = foldForOcr(item.name);
       if (key === "") continue;
@@ -411,16 +443,35 @@ export default class Items {
       } else if (seen.name !== item.name) {
         ambiguous.add(key);
       }
+      const digitKey = foldDigits(item.name);
+      const seenDigits = this.foldedDigits.get(digitKey);
+      if (seenDigits === undefined) {
+        this.foldedDigits.set(digitKey, { id: item.id, name: item.name });
+      } else if (seenDigits.name !== item.name) {
+        ambiguousDigits.add(digitKey);
+      }
     }
     for (const key of ambiguous) this.foldedNames.delete(key);
+    for (const key of ambiguousDigits) this.foldedDigits.delete(key);
   }
 
   search(searchQuery: string, lowestAcceptableScore = 0): Item {
     // An exact match once both sides are folded says more than any fuzzy
     // score can, so it is tried before the index and is not score-gated
-    const foldedQuery = foldForOcr(searchQuery);
-    const foldedRef =
-      this.foldedNames.get(foldedQuery) ?? this.nearestName(foldedQuery);
+    const foldedMatch = (query: string) => {
+      const folded = foldForOcr(query);
+      return (
+        this.foldedNames.get(folded) ??
+        this.nearestName(folded) ??
+        this.foldedDigits.get(foldDigits(query))
+      );
+    };
+    let foldedRef = foldedMatch(searchQuery);
+    if (!foldedRef) {
+      // The trader screen's price line may be glued onto the name
+      const stripped = stripPriceTail(searchQuery);
+      if (stripped !== searchQuery) foldedRef = foldedMatch(stripped);
+    }
     if (foldedRef) {
       const folded = this.getItemById(foldedRef.id);
       if (folded) {

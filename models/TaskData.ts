@@ -704,6 +704,25 @@ export default class TaskData {
     return previousLevelBuilt && gatesBuilt ? "active" : "locked";
   }
 
+  // The level the character must at least be, proven by the game's own
+  // logs: accepting a task the game gates at level 21 means the character
+  // was level 21 or better when it happened. TarkovTracker's level is set
+  // by hand and goes stale between visits to the site; this floor keeps
+  // level-gated features honest in the meantime.
+  levelFloorFrom(questEvents: QuestEventMap | null | undefined): number {
+    if (!questEvents || questEvents.size === 0) return 0;
+    let floor = 0;
+    for (const catalog of this.catalogByGameMode.values()) {
+      for (const task of catalog) {
+        if (task.minPlayerLevel <= floor) continue;
+        const event = questEvents.get(task.id);
+        if (!event || event.status === "failed") continue;
+        floor = task.minPlayerLevel;
+      }
+    }
+    return floor;
+  }
+
   // Every quest with every objective (cached per game mode); used by the
   // in-raid quest panel. Separate from loadSources, which only keeps the
   // item hand-ins the tooltip needs.

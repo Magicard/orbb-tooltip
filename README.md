@@ -20,7 +20,7 @@
 
 - **What the whole item sells for** — flea market average and the best trader offer (per-slot value shown small for anything bigger than 1×1)
 - **Quests and hideout upgrades that need it**, with counts
-- **Your progress** *(optional)* — link TarkovTracker and requirements you can do **right now show green**, ones locked behind later quests are dimmed "(later)", and ones you've already finished disappear
+- **Your progress** *(optional)* — link TarkovTracker and requirements you can do **right now show green**, ones locked behind later quests are dimmed "(later)", and ones you've already finished disappear. The flea price also respects your level: an item type the market gates above your character shows its price dimmed with the unlock — `₽21,456 (lvl 25)`
 
 **Ammo armour ratings.** Hover a round and two more boxes appear beside the price:
 

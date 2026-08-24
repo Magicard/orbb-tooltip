@@ -10,6 +10,9 @@ export default class Item {
   // BSG/tarkov.dev item id; differs from id only on the Tarkov Market
   // path (whose uid is its own scheme). Used to look up quest/hideout data
   bsgId?: string;
+  // Character level the flea market gates this item behind, when it gates
+  // it at all ("Trading items of this type becomes available at level 25")
+  fleaUnlockLevel?: number;
 }
 
 type ItemPrices = {
@@ -51,5 +54,6 @@ export class ClientItem extends Item {
     this.count = 1;
     this.mostRecentlyAddedItem = false;
     this.icon = item.icon;
+    this.fleaUnlockLevel = item.fleaUnlockLevel;
   }
 }

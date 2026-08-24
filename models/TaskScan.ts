@@ -89,6 +89,9 @@ function isBelieved(task: {
 // under it rather than the task's own; v5 drops the rotating tasks themselves,
 // which before it could be minted from a misread on any screen.
 const SCAN_STORE_VERSION = 5;
+// Bumped when the character-level picker's rules change, so a level read
+// under laxer rules is never carried forward
+const LEVEL_PICKER_VERSION = 2;
 
 export type ScannedObjective = {
   key: string; // normalized objective text
@@ -139,6 +142,8 @@ type Word = {
   // the sparse pass produced counter-lookalike garble there ("Ml v5") and a
   // second constrained look at those exact pixels read a clean "1/5"
   constrained?: string;
+  // Tesseract's confidence in the word, 0-100
+  conf: number;
 };
 
 // Enough tick-coloured pixels to be the glyph rather than noise
@@ -374,6 +379,64 @@ export default class TaskScan {
   }
 
   // Objective states written at or after a moment (what a scan pass found)
+  // The character's level as read off the OVERALL tab, corroborated by two
+  // sightings. The game never writes its level to any file, TarkovTracker's
+  // is whatever the player last set by hand, and every floor derivable from
+  // quest data lags levels behind - but the character screen paints it in
+  // glyphs three times the size of anything else, which OCR cannot miss.
+  private levelSighting: { value: number; seen: number } | null = null;
+  private confirmedLevel: { value: number; at: number; picker?: number } | null = null;
+
+  getCharacterLevel(): number | null {
+    return this.confirmedLevel?.value ?? null;
+  }
+
+  private readCharacterLevel(words: Word[], shaped: ShapedRow[], now: number): void {
+    // Only the OVERALL tab carries these; the Tasks and Gear screens do not
+    const page = shaped
+      .map((row) => row.words.map((w) => w.text).join(" ").toLowerCase())
+      .join(" | ");
+    const markers = ["common stats", "registration date", "survivor class", "account lifetime"];
+    if (markers.filter((m) => page.includes(m)).length < 2) return;
+    // The Scav profile draws the same screen with its own level; only the
+    // PMC's matters, and only the PMC view carries the faction emblem text
+    if (!page.includes("usec") && !page.includes("bear")) return;
+
+    const heights = words.map((w) => w.height).sort((a, b) => a - b);
+    const median = heights[Math.floor(heights.length / 2)] ?? 0;
+    const maxLeft = Math.max(...words.map((w) => w.left + w.width));
+    const maxTop = Math.max(...words.map((w) => w.top + w.height));
+
+    // The level: a bare one-or-two digit number, top-left of the screen, in
+    // glyphs far taller than the page's text
+    // The rank icon and nav debris also read as tall short tokens up
+    // there, but at rock-bottom confidence and in near-square boxes; real
+    // digits read above 90 and stand taller than they are wide. A leading
+    // zero is the Scav badge's style, never the PMC's.
+    let best: Word | null = null;
+    for (const w of words) {
+      if (!/^[1-9]\d?$/.test(w.text)) continue;
+      const value = Number(w.text);
+      if (value < 1 || value > 79) continue;
+      if (w.left > maxLeft * 0.25 || w.top > maxTop * 0.3) continue;
+      if (w.height < median * 1.8) continue;
+      if (w.conf < 70) continue;
+      if (w.width / w.text.length > w.height * 0.85) continue;
+      if (!best || w.height > best.height) best = w;
+    }
+    if (!best) return;
+
+    const value = Number(best.text);
+    if (this.levelSighting?.value === value) this.levelSighting.seen++;
+    else this.levelSighting = { value, seen: 1 };
+
+    if (this.levelSighting.seen >= 2 && this.confirmedLevel?.value !== value) {
+      this.confirmedLevel = { value, at: now, picker: LEVEL_PICKER_VERSION };
+      log.info(`Character level read off the OVERALL tab: ${value}`);
+      this.save();
+    }
+  }
+
   statesSince(at: number): ScannedObjectiveState[] {
     return [...this.objectiveStates.values()].filter((s) => s.at >= at);
   }
@@ -427,6 +490,7 @@ export default class TaskScan {
     const words = parseTsv(tsv);
     const { rows: shaped, table } = shapeRows(words);
     const rows = shaped.map((row) => row.words);
+    this.readCharacterLevel(words, shaped, Date.now());
     // The open task's own steps are the rows between these two headings; the
     // trader's chatter above them and the task list in the other pane are not
     const objectivesHeading = words.find((w) => /^objective/i.test(w.text));
@@ -522,7 +586,6 @@ export default class TaskScan {
 
     for (const { words: row, countdown } of shaped) {
       const texts = row.map((w) => w.text);
-      const joined = texts.join(" ");
 
       // ---- objective row: "... 3/5" (or "3 / 5" split into words) ----
       let counter: { count: number; total: number } | null = null;
@@ -813,14 +876,16 @@ export default class TaskScan {
     const rowTops = [...new Set(rows.map((row) => rowBounds(row).top))].sort((a, b) => a - b);
     const claimed = this.attributeToTasks(
       // A step of the open task sits between the Objective(s) and Rewards
-      // headings and starts at the same margin. Everything else on those
-      // lines is the trader's chatter or the task list in the other pane.
+      // headings and starts at the same margin - give or take the step's own
+      // leading icon, which the OPERATIONAL card draws slightly left of the
+      // heading itself. The other pane's rows sit hundreds of pixels away,
+      // so the slack cannot admit them.
       objectivePane
         ? objectiveRows.filter(
             (o) =>
               o.top > objectivePane.top &&
               o.top < objectivePane.bottom &&
-              o.left >= objectivePane.left
+              o.left >= objectivePane.left - PANE_LEFT_SLACK_PX
           )
         : [],
       taskRowsAt,
@@ -1220,6 +1285,17 @@ export default class TaskScan {
         this.lastScanCount = 0;
         return;
       }
+      // Levels stored by the first picker could be nav debris that outread
+      // the real number; only readings from the gated picker are trusted
+      if (
+        data.characterLevel &&
+        data.characterLevel.picker === LEVEL_PICKER_VERSION &&
+        typeof data.characterLevel.value === "number" &&
+        data.characterLevel.value >= 1 &&
+        data.characterLevel.value <= 79
+      ) {
+        this.confirmedLevel = data.characterLevel;
+      }
       for (const t of data.tasks ?? []) {
         // Rotating tasks stored before v5 could have been minted from a
         // misread of any screen, and their steps from whatever sat under them.
@@ -1265,6 +1341,7 @@ export default class TaskScan {
           dismissed: Object.fromEntries(this.dismissed),
           lastScanAt: this.lastScanAt,
           lastScanCount: this.lastScanCount,
+          characterLevel: this.confirmedLevel,
         })
       );
     } catch (error) {
@@ -1292,6 +1369,7 @@ function parseTsv(tsv: string): Word[] {
       ticks: Number(cols[12] ?? 0) || 0,
       doneBand: Number(cols[13] ?? 0) || 0,
       constrained: cols[14]?.trim() || undefined,
+      conf,
     });
   }
   return words;
@@ -1317,6 +1395,9 @@ const PANE_COVERAGE = 0.5;
 // How much bigger than the list's own row spacing a gap has to be before it is
 // taken as a row that failed to read rather than ordinary padding
 const MISSING_ROW_SLACK = 1.25;
+// How far left of the Objective(s) heading a step may begin: the step's own
+// icon column, not another pane
+const PANE_LEFT_SLACK_PX = 60;
 // Two "rows" closer than this are one row read twice, not the list's spacing
 const MIN_ROW_PITCH_PX = 30;
 // How far a card can sit from a section heading and still be under it

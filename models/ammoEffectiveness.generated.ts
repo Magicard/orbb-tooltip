@@ -62,32 +62,32 @@ export const AMMO_EFFECTIVENESS: Record<string, AmmoRow> = {
   "5d6e67fba4b9361bc73bc779": { damage: 35, projectiles: 9, damageTier: 4, classes: [3, 3, 3, 3, 3, 3] }, // 12/70 6.5mm Express buckshot
   "560d5e524bdc2d25448b4571": { damage: 39, projectiles: 8, damageTier: 4, classes: [3, 3, 3, 3, 3, 3] }, // 12/70 7mm buckshot
   "5d6e6806a4b936088465b17e": { damage: 50, projectiles: 8, damageTier: 6, classes: [3, 3, 3, 3, 3, 3] }, // 12/70 8.5mm Magnum buckshot
-  "5d6e68a8a4b9360b6c0d54e2": { damage: 164, projectiles: 1, damageTier: 1, classes: [6, 6, 6, 5, 4, 3] }, // 12/70 AP-20 armor-piercing slug
-  "5d6e68b3a4b9361bca7e50b5": { damage: 206, projectiles: 1, damageTier: 2, classes: [6, 3, 1, 0, 0, 0] }, // 12/70 Copper Sabot Premier HP slug
-  "5d6e68dea4b9361bcc29e659": { damage: 85, projectiles: 2, damageTier: 1, classes: [6, 5, 2, 0, 0, 0] }, // 12/70 Dual Sabot slug
+  "5d6e68a8a4b9360b6c0d54e2": { damage: 164, projectiles: 1, damageTier: 3, classes: [6, 6, 6, 5, 4, 3] }, // 12/70 AP-20 armor-piercing slug
+  "5d6e68b3a4b9361bca7e50b5": { damage: 206, projectiles: 1, damageTier: 4, classes: [6, 3, 1, 0, 0, 0] }, // 12/70 Copper Sabot Premier HP slug
+  "5d6e68dea4b9361bcc29e659": { damage: 85, projectiles: 2, damageTier: 3, classes: [6, 5, 2, 0, 0, 0] }, // 12/70 Dual Sabot slug
   "5d6e6911a4b9361bd5780d52": { damage: 25, projectiles: 8, damageTier: 2, classes: [6, 6, 6, 5, 5, 5] }, // 12/70 flechette
-  "5d6e68e6a4b9361c140bcfe0": { damage: 183, projectiles: 1, damageTier: 1, classes: [6, 6, 2, 0, 0, 0] }, // 12/70 FTX Custom Lite slug
-  "5d6e6869a4b9361c140bcfde": { damage: 190, projectiles: 1, damageTier: 1, classes: [6, 2, 0, 0, 0, 0] }, // 12/70 Grizzly 40 slug
-  "58820d1224597753c90aeb13": { damage: 167, projectiles: 1, damageTier: 1, classes: [6, 4, 1, 0, 0, 0] }, // 12/70 lead slug
-  "5d6e68c4a4b9361b93413f79": { damage: 197, projectiles: 1, damageTier: 1, classes: [6, 6, 5, 3, 1, 0] }, // 12/70 makeshift .50 BMG slug
+  "5d6e68e6a4b9361c140bcfe0": { damage: 183, projectiles: 1, damageTier: 3, classes: [6, 6, 2, 0, 0, 0] }, // 12/70 FTX Custom Lite slug
+  "5d6e6869a4b9361c140bcfde": { damage: 190, projectiles: 1, damageTier: 4, classes: [6, 2, 0, 0, 0, 0] }, // 12/70 Grizzly 40 slug
+  "58820d1224597753c90aeb13": { damage: 167, projectiles: 1, damageTier: 3, classes: [6, 4, 1, 0, 0, 0] }, // 12/70 lead slug
+  "5d6e68c4a4b9361b93413f79": { damage: 197, projectiles: 1, damageTier: 4, classes: [6, 6, 5, 3, 1, 0] }, // 12/70 makeshift .50 BMG slug
   "64b8ee384b75259c590fa89b": { damage: 25, projectiles: 10, damageTier: 3, classes: [6, 6, 5, 4, 4, 4] }, // 12/70 Piranha
-  "5d6e6891a4b9361bd473feea": { damage: 140, projectiles: 1, damageTier: 0, classes: [6, 5, 1, 0, 0, 0] }, // 12/70 Poleva-3 slug
-  "5d6e689ca4b9361bc8618956": { damage: 150, projectiles: 1, damageTier: 0, classes: [6, 6, 2, 0, 0, 0] }, // 12/70 Poleva-6u slug
-  "5c0d591486f7744c505b416f": { damage: 265, projectiles: 1, damageTier: 3, classes: [0, 0, 0, 0, 0, 0] }, // 12/70 RIP
-  "5d6e68d1a4b93622fe60e845": { damage: 220, projectiles: 1, damageTier: 2, classes: [0, 0, 0, 0, 0, 0] }, // 12/70 SuperFormance HP slug
+  "5d6e6891a4b9361bd473feea": { damage: 140, projectiles: 1, damageTier: 2, classes: [6, 5, 1, 0, 0, 0] }, // 12/70 Poleva-3 slug
+  "5d6e689ca4b9361bc8618956": { damage: 150, projectiles: 1, damageTier: 2, classes: [6, 6, 2, 0, 0, 0] }, // 12/70 Poleva-6u slug
+  "5c0d591486f7744c505b416f": { damage: 265, projectiles: 1, damageTier: 6, classes: [0, 0, 0, 0, 0, 0] }, // 12/70 RIP
+  "5d6e68d1a4b93622fe60e845": { damage: 220, projectiles: 1, damageTier: 5, classes: [0, 0, 0, 0, 0, 0] }, // 12/70 SuperFormance HP slug
   "5d6e695fa4b936359b35d852": { damage: 26, projectiles: 8, damageTier: 6, classes: [3, 3, 3, 3, 3, 3] }, // 20/70 5.6mm buckshot
   "5d6e69b9a4b9361bc8618958": { damage: 22, projectiles: 8, damageTier: 5, classes: [3, 3, 3, 3, 3, 3] }, // 20/70 6.2mm buckshot
   "5d6e69c7a4b9360b6c0d54e4": { damage: 23, projectiles: 9, damageTier: 6, classes: [3, 3, 3, 3, 3, 3] }, // 20/70 7.3mm buckshot
   "5a38ebd9c4a282000d722a5b": { damage: 25, projectiles: 8, damageTier: 6, classes: [3, 3, 3, 3, 3, 3] }, // 20/70 7.5mm buckshot
-  "660137ef76c1b56143052be8": { damage: 143, projectiles: 1, damageTier: 3, classes: [6, 6, 5, 3, 1, 0] }, // 20/70 Dangerous Game Slug
+  "660137ef76c1b56143052be8": { damage: 143, projectiles: 1, damageTier: 4, classes: [6, 6, 5, 3, 1, 0] }, // 20/70 Dangerous Game Slug
   "5d6e6a5fa4b93614ec501745": { damage: 198, projectiles: 1, damageTier: 6, classes: [1, 0, 0, 0, 0, 0] }, // 20/70 Devastator slug
   "6601380580e77cfd080e3418": { damage: 20, projectiles: 8, damageTier: 4, classes: [6, 6, 5, 4, 4, 4] }, // 20/70 flechette
-  "5d6e6a53a4b9361bd473feec": { damage: 120, projectiles: 1, damageTier: 2, classes: [6, 2, 0, 0, 0, 0] }, // 20/70 Poleva-3 slug
+  "5d6e6a53a4b9361bd473feec": { damage: 120, projectiles: 1, damageTier: 3, classes: [6, 2, 0, 0, 0, 0] }, // 20/70 Poleva-3 slug
   "5d6e6a42a4b9364f07165f52": { damage: 135, projectiles: 1, damageTier: 3, classes: [6, 5, 1, 0, 0, 0] }, // 20/70 Poleva-6u slug
   "5d6e6a05a4b93618084f58d0": { damage: 154, projectiles: 1, damageTier: 4, classes: [6, 5, 1, 0, 0, 0] }, // 20/70 Star slug
   "660137d8481cc6907a0c5cda": { damage: 155, projectiles: 1, damageTier: 4, classes: [6, 6, 6, 3, 1, 0] }, // 20/70 TSS Armor Piercing Slug
   "6601546f86889319850bd566": { damage: 1, projectiles: 1, damageTier: 6, classes: [0, 0, 0, 0, 0, 0] }, // 20x1mm disk
-  "5e85aa1a988a8701445df1f5": { damage: 192, projectiles: 1, damageTier: 0, classes: [6, 6, 6, 6, 4, 4] }, // 23x75mm Barrikada slug
+  "5e85aa1a988a8701445df1f5": { damage: 192, projectiles: 1, damageTier: 6, classes: [6, 6, 6, 6, 4, 4] }, // 23x75mm Barrikada slug
   "5e85a9a6eacf8c039e4e2ac1": { damage: 87, projectiles: 8, damageTier: 6, classes: [6, 4, 3, 3, 3, 3] }, // 23x75mm Shrapnel-10 buckshot
   "5f647f31b6238e5dd066e196": { damage: 78, projectiles: 8, damageTier: 5, classes: [6, 4, 3, 3, 3, 3] }, // 23x75mm Shrapnel-25 buckshot
   "5e85a9f4add9fe03027d9bf1": { damage: 0, projectiles: 1, damageTier: 0, classes: [0, 0, 0, 0, 0, 0] }, // 23x75mm Zvezda flashbang round

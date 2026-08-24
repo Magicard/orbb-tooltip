@@ -523,14 +523,29 @@ try {
 
     function pushProfileInfo() {
       const progress = items?.taskData.getLastProgress();
+      // TarkovTracker's level is whatever the player last set by hand and
+      // routinely lags the character. The game's log proves a floor - a
+      // level-21 task cannot be accepted below 21 - so the better of the
+      // two is used, and it works even with no tracker linked at all.
+      const levelFloor =
+        items?.taskData.levelFloorFrom(gameLog?.getQuestEvents()) ?? 0;
+      const trackerLevel = progress?.playerLevel ?? 0;
+      const scannedLevel = taskScan.getCharacterLevel() ?? 0;
+      const bestLevel = Math.max(trackerLevel, levelFloor, scannedLevel);
+      const info = {
+        displayName: progress?.displayName ?? null,
+        playerLevel: bestLevel > 0 ? bestLevel : null,
+        pmcFaction: progress?.pmcFaction ?? null,
+      };
       void mainWindow.then((win) => {
         if (win.isDestroyed()) return;
-        win.webContents.send(IpcConstants.ProfileInfo, {
-          displayName: progress?.displayName ?? null,
-          playerLevel: progress?.playerLevel ?? null,
-          pmcFaction: progress?.pmcFaction ?? null,
-        });
+        win.webContents.send(IpcConstants.ProfileInfo, info);
       });
+      // The tooltip greys out flea prices the character's level cannot
+      // trade at yet, so it needs to know the level too
+      if (tooltipWindow && !tooltipWindow.isDestroyed()) {
+        tooltipWindow.webContents.send(IpcConstants.ProfileInfo, info);
+      }
     }
 
     function pushQuestPanelData() {

@@ -3,6 +3,7 @@ import { TOOLTIP_ITEM } from "../state/tooltipItem";
 import { useHookstate } from "@hookstate/core";
 import { fleaPrice, numberWithCommas } from "../../utils";
 import { ItemTask } from "../../models/Item";
+import IpcConstants from "../../models/IpcConstants";
 import {
   ARMOR_CLASSES,
   ammoStatsFor,
@@ -20,7 +21,18 @@ export function Tooltip() {
   const tooltipItem = useHookstate(TOOLTIP_ITEM);
   const item = tooltipItem.get().item;
   const [showPerSlotPrice, setShowPerSlotPrice] = useState(true);
+  // From TarkovTracker, when linked; null means "unknown", which never greys
+  const [playerLevel, setPlayerLevel] = useState<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    window.electron.receive(
+      IpcConstants.ProfileInfo,
+      (_event: unknown, info: { playerLevel: number | null }) => {
+        setPlayerLevel(info?.playerLevel ?? null);
+      }
+    );
+  }, []);
 
   // Tell the main process how big the rendered tooltip really is so it can
   // keep it on-screen without guessing (runs after every visible change)
@@ -78,6 +90,12 @@ export function Tooltip() {
 
     const visibleTasks = itemTasks.slice(0, MAX_TASK_ROWS);
     const hiddenTaskCount = itemTasks.length - visibleTasks.length;
+    // The flea gates some item types behind character level; a price the
+    // character cannot trade at yet is still shown, but dimmed and marked
+    const fleaLocked =
+      playerLevel !== null &&
+      item.fleaUnlockLevel !== undefined &&
+      playerLevel < item.fleaUnlockLevel;
 
     // The measured element is the row, so the reported size covers both boxes
     return (
@@ -91,18 +109,28 @@ export function Tooltip() {
           {/* FLEA MARKET: what the whole item is worth, then per slot */}
           <div className="whitespace-nowrap">
             {item.availableOnFleaMarket ? (
-              <>
-                <span className="tracking-wider">
+              fleaLocked ? (
+                <span className="text-stone-500 tracking-wider">
                   <span className="font-['Nunito']">₽</span>
                   {numberWithCommas(fleaPriceToUse)}
-                </span>
-                {perSlot && (
-                  <span className="ml-1.5 text-[12px] text-stone-500 tracking-wider">
-                    <span className="font-['Nunito']">₽</span>
-                    {numberWithCommas(fleaPricePerSlot)}/slot
+                  <span className="ml-1 text-[12px]">
+                    (lvl {item.fleaUnlockLevel})
                   </span>
-                )}
-              </>
+                </span>
+              ) : (
+                <>
+                  <span className="tracking-wider">
+                    <span className="font-['Nunito']">₽</span>
+                    {numberWithCommas(fleaPriceToUse)}
+                  </span>
+                  {perSlot && (
+                    <span className="ml-1.5 text-[12px] text-stone-500 tracking-wider">
+                      <span className="font-['Nunito']">₽</span>
+                      {numberWithCommas(fleaPricePerSlot)}/slot
+                    </span>
+                  )}
+                </>
+              )
             ) : (
               <span className="text-stone-400">Unavailable on Flea</span>
             )}

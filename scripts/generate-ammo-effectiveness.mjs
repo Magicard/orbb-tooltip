@@ -240,12 +240,27 @@ for (const round of rounds) {
 }
 
 // Graded over the rounds that ship, so the best one you can actually hover is
-// the S and no phantom maximum sits above it
+// the S and no phantom maximum sits above it.
+//
+// Shotgun calibres are split the way the charts split them: slugs against
+// slugs, shot against shot. Grading a 220-damage slug against 8x50 Magnum
+// buckshot's 400 calls it weak when it is one of the best slugs there is -
+// nobody weighing up slugs is choosing against buckshot's whole spread.
+const multiProjectile = new Set();
+for (const round of table.values()) {
+  if (round.projectiles > 1) multiProjectile.add(round.caliber);
+}
+const gradeGroup = (round) => {
+  if (!multiProjectile.has(round.caliber)) return round.caliber;
+  const slug = round.projectiles === 1 || /slug/i.test(round.name);
+  return round.caliber + (slug ? "|slugs" : "|shot");
+};
 const byCaliber = new Map();
 for (const round of table.values()) {
-  const group = byCaliber.get(round.caliber);
+  const key = gradeGroup(round);
+  const group = byCaliber.get(key);
   if (group) group.push(round);
-  else byCaliber.set(round.caliber, [round]);
+  else byCaliber.set(key, [round]);
 }
 for (const group of byCaliber.values()) {
   const best = Math.max(...group.map((r) => r.damage * r.projectiles));
