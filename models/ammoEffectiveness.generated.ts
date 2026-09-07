@@ -2,7 +2,7 @@
 // Regenerate after a game patch with: npm run generate:ammo
 //
 // Source: https://escapefromtarkov.fandom.com/wiki/Ballistics
-// Wiki revision 343633, last edited 2026-05-08
+// Wiki revision 357657, last edited 2026-09-04
 //
 // What each round does, keyed by BSG item id:
 //
@@ -128,6 +128,10 @@ export const AMMO_EFFECTIVENESS: Record<string, AmmoRow> = {
   "5cc80f38e4a949001152b560": { damage: 49, projectiles: 1, damageTier: 2, classes: [6, 6, 6, 5, 4, 3] }, // 5.7x28mm SS190
   "5cc80f8fe4a949033b0224a2": { damage: 62, projectiles: 1, damageTier: 3, classes: [6, 6, 4, 1, 0, 0] }, // 5.7x28mm SS197SR
   "5cc80f79e4a949033c7343b2": { damage: 70, projectiles: 1, damageTier: 4, classes: [6, 4, 1, 0, 0, 0] }, // 5.7x28mm SS198LF
+  "6a07208057b2695f9d001e63": { damage: 53, projectiles: 1, damageTier: 6, classes: [6, 6, 6, 5, 3, 2] }, // 5.8x42mm DBP191
+  "6a42661705016139300b2085": { damage: 57, projectiles: 1, damageTier: 6, classes: [6, 6, 6, 4, 2, 1] }, // 5.8x42mm DBX95
+  "6a42662fcb506840dd053827": { damage: 46, projectiles: 1, damageTier: 5, classes: [6, 6, 6, 6, 6, 5] }, // 5.8x42mm DVC12
+  "6a426637ddc63098d100ae67": { damage: 48, projectiles: 1, damageTier: 5, classes: [6, 6, 6, 6, 5, 5] }, // 5.8x42mm DVX12
   "6529302b8c26af6326029fb7": { damage: 80, projectiles: 1, damageTier: 6, classes: [6, 6, 6, 5, 4, 2] }, // 6.8x51mm SIG FMJ
   "6529243824cbe3c74a05e5c1": { damage: 72, projectiles: 1, damageTier: 6, classes: [6, 6, 6, 6, 5, 5] }, // 6.8x51mm SIG Hybrid
   "5735fdcd2459776445391d61": { damage: 58, projectiles: 1, damageTier: 5, classes: [6, 2, 0, 0, 0, 0] }, // 7.62x25mm TT AKBS
@@ -149,7 +153,7 @@ export const AMMO_EFFECTIVENESS: Record<string, AmmoRow> = {
   "64b7af734b75259c590fa895": { damage: 68, projectiles: 1, damageTier: 5, classes: [6, 6, 2, 0, 0, 0] }, // 7.62x39mm SP
   "59e4cf5286f7741778269d8a": { damage: 65, projectiles: 1, damageTier: 5, classes: [6, 6, 6, 3, 1, 0] }, // 7.62x39mm T-45M1 gzh
   "59e4d24686f7741776641ac7": { damage: 56, projectiles: 1, damageTier: 4, classes: [6, 6, 5, 3, 1, 0] }, // 7.62x39mm US gzh
-  "5e023e53d4353e3302577c4c": { damage: 83, projectiles: 1, damageTier: 4, classes: [6, 6, 6, 4, 3, 2] }, // 7.62x51mm BCP FMJ
+  "5e023e53d4353e3302577c4c": { damage: 83, projectiles: 1, damageTier: 4, classes: [6, 6, 6, 5, 4, 2] }, // 7.62x51mm BCP FMJ
   "5a6086ea4f39f99cd479502f": { damage: 73, projectiles: 1, damageTier: 3, classes: [6, 6, 6, 6, 6, 6] }, // 7.62x51mm M61
   "5a608bf24f39f98ffc77720e": { damage: 82, projectiles: 1, damageTier: 4, classes: [6, 6, 6, 6, 5, 4] }, // 7.62x51mm M62 Tracer
   "58dd3ad986f77403051cba8f": { damage: 80, projectiles: 1, damageTier: 4, classes: [6, 6, 6, 6, 5, 5] }, // 7.62x51mm M80
