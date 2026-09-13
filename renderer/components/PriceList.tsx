@@ -484,7 +484,7 @@ function HeaderButton({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="shrink-0 w-8 h-8 flex items-center justify-center rounded text-stone-300 hover:text-white bg-stone-700/60 hover:bg-stone-600/80 transition-colors"
+      className="no-drag shrink-0 w-8 h-8 flex items-center justify-center rounded text-stone-300 hover:text-white bg-stone-700/60 hover:bg-stone-600/80 transition-colors"
     >
       {children}
     </button>

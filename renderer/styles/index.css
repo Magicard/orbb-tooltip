@@ -60,6 +60,12 @@
   -webkit-app-region: drag;
 }
 
+/* Buttons inside a drag region don't receive clicks unless excluded */
+.draggable button,
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
 /* Slim opacity slider in the quest panel */
 .orbb-slider {
   -webkit-appearance: none;
